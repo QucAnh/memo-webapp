@@ -1,13 +1,13 @@
 # MemoFlow
 
-**A fast, minimal Markdown note workspace with live Firestore sync — or a browser-local workspace when you would rather not sign in.**
+**A calm, distraction-free Markdown study notebook with instant local-first entry, a VS Code-style nested folder explorer, `⌘K` quick switcher, and real-time Firestore sync.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![React 19](https://img.shields.io/badge/React-19-087EA4?logo=react&logoColor=white)](https://react.dev)
 [![Vite](https://img.shields.io/badge/built%20with-Vite-646CFF?logo=vite&logoColor=white)](https://vitejs.dev)
 [![Firebase](https://img.shields.io/badge/backend-Firebase-FFCA28?logo=firebase&logoColor=black)](https://firebase.google.com)
 
-Live app: **https://meno-webapp.vercel.app**
+Live app: **https://app.qanhdomain.id.vn** (and **https://meno-webapp.vercel.app**)
 
 ---
 
@@ -17,72 +17,54 @@ Everything below is implemented in this repository.
 
 | Area | What you get |
 | --- | --- |
-| Markdown editor | Source pane and rendered GitHub-Flavored Markdown preview side by side, driven by `marked` |
-| View modes | Split, editor-only, or preview-only; auto-switches to editor-only below 768 px |
-| Formatting toolbar | Bold, italic, strikethrough, H1–H3, quote, inline code, code block, bullet / numbered / task list, link, table |
-| Auto-save | 500 ms debounce on title and content, 200 ms on folder and tags, `⌘/Ctrl+S` to save immediately |
-| Sync status | `Saving…` / `Saved` / `Offline` / `Error` indicator, with an offline banner |
-| Organization | Flat folders (five defaults plus your own), tags, pinned notes, filter chips |
-| Search | Keyword, `#tag`, `tag:`, `folder:`, `@folder`, `keyword:#tag`, quoted phrases; match highlighting and centered excerpts |
-| Per-note stats | Word count, character count, estimated read time, last-updated time |
-| Output | Copy raw Markdown to the clipboard, download the note as `.md` |
-| Theme | Light and dark, persisted, following the system preference on first visit |
-| Responsive | Mobile drawer navigation, collapsible sidebar, auto-adjusting editor layout |
-| Accounts | Google sign-in, email/password sign-in and sign-up, or an account-less local workspace |
+| Distraction-free 1-pane editor | Centered Paper Calm canvas (`max-w-3xl`) where header & footer chrome gently fade while typing |
+| View modes | Write, Preview (sanitized GitHub-Flavored Markdown via `marked` + `DOMPurify` with interactive task checkboxes), or Split side-by-side (`≥1024px`) with bidirectional scroll sync |
+| Formatting toolbar | Toggleable `Format` pill with Bold, Italic, Strikethrough, H1–H3, Quote, Inline/Block Code, Bullet/Numbered/Task lists, Link, Table, and a lazy-loaded searchable **`frimousse`** emoji picker — all preserving native `Ctrl/⌘+Z` undo/redo |
+| VS Code-style Folder Explorer | Slide-out modal drawer (`⌘\`) with unlimited nested folders (`Study/Math/Calculus`), vertical indent guides, rolled-up note counts, inline subfolder creation, per-folder new-note actions, `Explorer` / `Pinned` tabs, and Collapse All |
+| `⌘K` Command Palette | Instant note search (`#tag`, `tag:`, `folder:`, `@folder`, `keyword:#tag`, quoted phrases) with match highlighting, centered excerpts, keyboard navigation, and quick actions |
+| Tag autocomplete | Inline `+ tag` combobox searches existing workspace tags before offering to create a new tag |
+| Zero-loss auto-save | Isolated per-note debounced save queue (500 ms title/content, 200 ms folder/tags) that flushes automatically on note switches, tab hide, and page unload; `⌘/Ctrl+S` saves immediately |
+| Offline-ready sync | Multi-tab Firestore IndexedDB persistence (`persistentLocalCache`) for signed-in users, `localStorage` for instant account-less workspaces, and a color-coded status pill (`Saved locally` / `Synced` / `Saving…` / `Offline` / `Sync error · Retry`) |
+| Output | Copy raw Markdown to clipboard or download the active note as `.md` from the `•••` menu |
+| Theme | Warm Paper Calm light & dark themes, persisted, following OS `prefers-color-scheme` changes automatically until overridden |
+| Accounts | Instant local-first entry with no login wall; sign in anytime via Google or Email/Password in `AuthModal` to migrate local notes to Firestore |
 
 ### Keyboard shortcuts
 
 | Shortcut | Action |
 | --- | --- |
-| `⌘/Ctrl+N` | New note |
+| `⌘/Ctrl+K` | Open Command Palette & quick switcher |
+| `⌘/Ctrl+\` | Toggle Notes & Folders Explorer drawer |
+| `⌘/Ctrl+N` | Create a new note |
+| `⌘/Ctrl+E` | Toggle Write / Preview mode |
 | `⌘/Ctrl+S` | Save the active note immediately |
-| `⌘/Ctrl+\` | Collapse or expand the sidebar |
-| `Enter` | Add a tag in the tag field |
+| `⌘/Ctrl+Z` / `Shift+Z` | Undo / Redo (including format toolbar & emoji insertions) |
 
 ---
 
 ## How it works
 
-**Two working modes, one data layer.** `src/hooks/useNotes.ts` owns every read and write. When a user is signed in, notes live in the Firestore `notes` collection and arrive through a real-time `onSnapshot` listener. When the user chooses the account-less workspace, the same hook reads and writes `localStorage` instead. Components never talk to Firebase directly.
+**Instant local-first, optional cloud sync.** `src/hooks/useNotes.ts` owns every read and write. New visitors start directly in a browser-local workspace backed by `localStorage` with zero login friction. Signing in activates a real-time Firestore `onSnapshot` listener backed by multi-tab IndexedDB `persistentLocalCache`. Components never talk to Firebase directly.
 
-**Optimistic saves.** Edits update React state first so typing never waits on the network, then a debounced write commits to Firestore with `setDoc(..., { merge: true })`. See `src/hooks/useNotes.ts`.
+**Per-note save queue.** Typing updates React state optimistically, then `src/utils/saveQueue.ts` schedules an isolated debounced write per note ID. Switching notes, hiding the tab, or unloading the page flushes pending edits immediately so fast note switches never drop changes.
 
-**Guest notes follow you in.** On the first sign-in, the local workspace's notes are migrated to the new account, and the local copy is deleted only after every write commits. If a write fails, the notes stay in the browser and the migration retries on the next sign-in. That ordering guarantee lives in `src/utils/migration.ts`, where the Firestore write and the cleanup are injected — which is what makes it testable without a database.
+**Safe guest-to-account migration.** On sign-in, `src/utils/migration.ts` copies browser-local notes to Firestore and deletes the local copy only after every write commits. If a write fails, the local notes stay in the browser and retry on the next sign-in.
 
-**Note shape.** `src/types/note.ts`:
+**Nested folders with zero schema migration.** Folders are stored as normalized slash-delimited paths (e.g. `Study/Math/Calculus`) in `note.folder`. `src/utils/folders.ts` synthesizes missing parent nodes, builds the nested explorer tree with rolled-up counts, and handles descendant-aware filtering and atomic `writeBatch` folder deletion (safely moving notes to `General`).
 
-```ts
-interface Note {
-  id: string;
-  title: string;
-  content: string;
-  tags: string[];
-  folder: string;
-  isPinned: boolean;
-  updatedAt: number;
-  createdAt: number;
-  userId: string;
-}
-```
+**Sanitized Markdown & interactive tasks.** `src/utils/markdown.ts` parses GFM with `marked` and sanitizes all HTML output with `DOMPurify` before rendering. Clicking rendered task-list checkboxes toggles the corresponding `- [ ]` / `- [x]` line in raw Markdown (skipping fenced code blocks).
 
-**Access control.** `firestore.rules` restricts every note to its owner:
-
-```
-match /notes/{noteId} {
-  allow read, update, delete: if request.auth != null && resource.data.userId == request.auth.uid;
-  allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
-}
-```
+**Hardened Firestore rules.** `firestore.rules` enforces owner-only `read`/`delete`, immutable `id`/`userId`/`createdAt` on `update`, strict 9-field schema/type/size validation on both `create` and `update`, and default-deny on all other paths.
 
 ---
 
 ## Tech stack
 
-- **React 19** + **TypeScript**, bundled by **Vite 6**
-- **Tailwind CSS 4** (via `@tailwindcss/vite`) and **lucide-react** icons
-- **marked** for GitHub-Flavored Markdown rendering
-- **Firebase 12** modular SDK — Authentication and Firestore (no Storage, no Cloud Functions)
-- **No state library.** State is React hooks plus two context providers (`AuthContext`, `ThemeContext`)
+- **React 19** + **TypeScript (`strict: true`)**, bundled by **Vite 6**
+- **Tailwind CSS 4** (`@tailwindcss/vite`), **lucide-react** icons, and lazy-loaded **frimousse** emoji picker
+- **marked** + **DOMPurify** for safe GitHub-Flavored Markdown rendering
+- **Firebase 12** modular SDK — Authentication and Cloud Firestore with persistent multi-tab local cache
+- **Vitest** (+ `jsdom`) for unit tests; **no external state library**
 
 ---
 
@@ -92,36 +74,38 @@ match /notes/{noteId} {
 meno-webapp/
 ├── src/
 │   ├── components/
-│   │   ├── AuthModal.tsx              # in-workspace sign in / sign out
-│   │   ├── ConfirmDeleteModal.tsx
-│   │   ├── EditorSplitView.tsx        # editor, preview, toolbar, stats
-│   │   ├── MarkdownRenderer.tsx       # marked → HTML
-│   │   ├── NotesList.tsx              # list, search bar, filter chips
+│   │   ├── AuthModal.tsx                 # native <dialog> sign-in / account management
+│   │   ├── CommandPalette.tsx            # ⌘K search & quick actions
+│   │   ├── ConfirmDeleteModal.tsx        # native <dialog> note/folder delete confirmation
+│   │   ├── EditorView.tsx                # 1-pane Paper Calm editor, toolbar, scroll sync, footer
+│   │   ├── EmojiPickerPopover.tsx        # lazy-loaded frimousse searchable emoji picker
+│   │   ├── MarkdownRenderer.tsx          # sanitized GFM preview + interactive task checkboxes
+│   │   ├── NavigationDrawer.tsx          # VS Code-style nested folder & notes explorer
 │   │   ├── OperationNotAllowedAlert.tsx
-│   │   ├── Sidebar.tsx                # folders, tags, theme switch, account footer
-│   │   ├── SignInPage.tsx             # signed-out screen, guest entry
-│   │   ├── SyncStatusIndicator.tsx
 │   │   └── UnauthorizedDomainAlert.tsx
 │   ├── context/
 │   │   ├── AuthContext.tsx
 │   │   └── ThemeContext.tsx
-│   ├── hooks/useNotes.ts              # all note state, sync, folders, search
-│   ├── test/factories.ts              # shared test fixtures
+│   ├── hooks/useNotes.ts                 # central data layer, save queue, sync, folders
+│   ├── test/factories.ts                 # shared test fixtures
 │   ├── types/note.ts
-│   ├── assets/MEMO.png                # app mark, imported by the sidebar
+│   ├── assets/MEMO.png
 │   ├── utils/
-│   │   ├── folders.ts                 # folder list rules (tested)
-│   │   ├── migration.ts               # local notes → account migration (tested)
-│   │   ├── notes.ts                   # dedupe, sort, filter (tested)
-│   │   ├── folderStyles.ts
-│   │   └── searchUtils.tsx
-│   ├── App.tsx                        # layout, routing between the three screens
+│   │   ├── folders.ts (+ .test.ts)       # nested paths, tree builder, descendant deletion
+│   │   ├── markdown.ts (+ .test.ts)      # DOMPurify GFM renderer & task checkbox toggling
+│   │   ├── migration.ts (+ .test.ts)     # safe local → Firestore migration
+│   │   ├── notes.ts (+ .test.ts)         # dedupe, sort, filter
+│   │   ├── saveQueue.ts (+ .test.ts)     # per-note debounced save queue
+│   │   ├── searchUtils.tsx (+ .test.ts)  # query parser, excerpts, highlighting
+│   │   └── welcomeNote.ts
+│   ├── App.tsx
 │   ├── firebaseConfig.ts
 │   ├── index.css
 │   └── main.tsx
-├── .github/workflows/check.yml     # install, type check and tests on push
-├── firebase-applet-config.json        # Firebase client config (public by design)
-├── firestore.rules
+├── .github/workflows/check.yml           # install, strict typecheck, tests, and build
+├── firebase.json / .firebaserc
+├── firebase-applet-config.json           # Firebase client config (public by design)
+├── firestore.rules                       # owner-only, schema-validated Firestore rules
 └── index.html
 ```
 
@@ -129,51 +113,49 @@ meno-webapp/
 
 ## Getting started
 
-Requires Node.js 18 or newer.
+Requires Node.js 18+ (or Bun).
 
 ```bash
-npm install
-npm run dev      # http://localhost:3000
+bun install
+bun run dev      # http://localhost:3000
 ```
 
-`bun install && bun run dev` works too.
+`npm install && npm run dev` works too.
 
 ### Firebase setup
 
-The app expects a Firebase project with Authentication and Firestore:
-
-1. Enable the **Google** and **Email/Password** sign-in providers in Firebase Console → Authentication → Sign-in method.
-2. Create a Firestore database and publish the rules in `firestore.rules`.
-3. Add your deployment hostname under Authentication → Settings → Authorized domains. A missing entry produces `auth/unauthorized-domain`, which the app reports with a dedicated alert.
-4. Point the app at your project by editing `firebase-applet-config.json`, or by setting the `VITE_FIREBASE_*` variables — `src/firebaseConfig.ts` reads the environment first, then falls back to the JSON file.
+1. Enable **Google** and **Email/Password** providers in Firebase Console → Authentication → Sign-in method.
+2. Add your deployment hostnames under Authentication → Settings → Authorized domains.
+3. Deploy the Firestore security rules:
+   ```bash
+   npx -y firebase-tools@latest deploy --only firestore:rules
+   ```
+4. Point the app at your project via `firebase-applet-config.json` or `VITE_FIREBASE_*` environment variables.
 
 ### Commands
 
 | Command | Purpose |
 | --- | --- |
-| `npm run dev` | Dev server on port 3000 |
-| `npm run build` | Production build into `dist/` |
-| `npm run preview` | Serve the production build |
-| `npm run lint` | `tsc --noEmit` type check |
-| `npm run test` | Vitest unit tests |
+| `bun run dev` | Dev server on port 3000 |
+| `bun run build` | Production build into `dist/` |
+| `bun run preview` | Serve the production build |
+| `bun run lint` | Strict `tsc --noEmit` type check |
+| `bun run test` | Vitest unit tests (6 suites, 74 tests) |
 
 ---
 
 ## Known limitations
 
-- **Test coverage is limited to the pure logic.** Vitest covers note de-duplication and sorting, the filter rules, folder-list rules, the search-query parser, and the local-notes migration. React components and the Firestore wiring have no automated coverage; the migration is verified through injected write and cleanup functions rather than a live database.
-- **Offline support is in-memory for signed-in users.** The Firestore client is created without persistent caching (`src/firebaseConfig.ts`), so queued writes survive a network drop but not a page reload. The offline banner's promise that edits are "safely stored locally" holds only for the account-less workspace, which uses `localStorage`.
-- **The account-less workspace is tied to one browser.** Clearing site data deletes those notes. Signing in migrates them to the account and then clears the local copy.
-- **Folders do not nest.** They are a flat, case-insensitive list; deleting a folder moves its notes to `General`.
-- **Search is client-side** over the notes already loaded in the browser, not a Firestore query.
-- **The bundle is one ~1 MB chunk.** No code splitting.
-- **Duplicate guard is heuristic.** Notes are de-duplicated by id, and near-identical notes by a title+content+folder signature, which also collapses repeated copies of the welcome template.
+- **Test coverage focuses on core logic.** Vitest covers Markdown sanitization & task toggling, the per-note save queue, nested folder trees, note dedupe/sort/filter, search parsing, and local-to-cloud migration (74 tests). React component integration tests are not yet added.
+- **Empty custom folders are browser-local.** Folders containing notes sync across devices via `note.folder`, while empty custom folders are persisted in `localStorage`.
+- **Search is client-side** over notes loaded in the browser, not a server-side search index.
+- **Main bundle size.** `EmojiPickerPopover` is lazy-loaded (`~10 kB` gzipped), while the core React + Firebase bundle is currently a single chunk.
 
 ---
 
 ## Possible future work
 
-Not committed to: spaced-repetition flashcards, tasks linked to notes, a command palette, richer export (JSON/PDF), and study analytics. The current focus is making the note workspace itself solid.
+Planned for a future Study Pro phase (not committed yet): Markdown-to-flashcard spaced repetition, clean PDF / Cornell Notes print export, Pomodoro focus timer + Sepia paper theme, and optional BYO-key Gemini study helper.
 
 ---
 
