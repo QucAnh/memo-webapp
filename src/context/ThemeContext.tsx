@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from "react";
+import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
 
 type Theme = "light" | "dark";
 
@@ -13,27 +13,48 @@ const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
 const THEME_STORAGE_KEY = "memoflow_theme_mode";
 
+function readStoredTheme(): Theme | null {
+  try {
+    const stored = localStorage.getItem(THEME_STORAGE_KEY);
+    if (stored === "light" || stored === "dark") {
+      return stored;
+    }
+  } catch {
+    // ignore storage errors
+  }
+  return null;
+}
+
+function getSystemTheme(): Theme {
+  if (
+    typeof window !== "undefined" &&
+    window.matchMedia("(prefers-color-scheme: dark)").matches
+  ) {
+    return "dark";
+  }
+  return "light";
+}
+
 export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
 }) => {
-  const [theme, setThemeState] = useState<Theme>(() => {
-    try {
-      const stored = localStorage.getItem(THEME_STORAGE_KEY);
-      if (stored === "light" || stored === "dark") {
-        return stored;
-      }
-      // Check system preference
-      if (
-        typeof window !== "undefined" &&
-        window.matchMedia("(prefers-color-scheme: dark)").matches
-      ) {
-        return "dark";
-      }
-    } catch {
-      // ignore
-    }
-    return "light";
-  });
+  const [hasManualPreference, setHasManualPreference] = useState<boolean>(
+    () => readStoredTheme() !== null,
+  );
+  const [theme, setThemeState] = useState<Theme>(
+    () => readStoredTheme() ?? getSystemTheme(),
+  );
+
+  // Follow OS color-scheme changes until the user explicitly chooses a theme
+  useEffect(() => {
+    if (hasManualPreference || typeof window === "undefined") return;
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const handleChange = (e: MediaQueryListEvent) => {
+      setThemeState(e.matches ? "dark" : "light");
+    };
+    mediaQuery.addEventListener("change", handleChange);
+    return () => mediaQuery.removeEventListener("change", handleChange);
+  }, [hasManualPreference]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -49,21 +70,30 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({
       root.setAttribute("data-theme", "light");
       root.style.colorScheme = "light";
     }
-
-    try {
-      localStorage.setItem(THEME_STORAGE_KEY, theme);
-    } catch {
-      // ignore
-    }
   }, [theme]);
 
-  const setTheme = (newTheme: Theme) => {
+  const setTheme = useCallback((newTheme: Theme) => {
+    setHasManualPreference(true);
     setThemeState(newTheme);
-  };
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, newTheme);
+    } catch {
+      // ignore storage errors
+    }
+  }, []);
 
-  const toggleTheme = () => {
-    setThemeState((prev) => (prev === "dark" ? "light" : "dark"));
-  };
+  const toggleTheme = useCallback(() => {
+    setHasManualPreference(true);
+    setThemeState((prev) => {
+      const next = prev === "dark" ? "light" : "dark";
+      try {
+        localStorage.setItem(THEME_STORAGE_KEY, next);
+      } catch {
+        // ignore storage errors
+      }
+      return next;
+    });
+  }, []);
 
   return (
     <ThemeContext.Provider

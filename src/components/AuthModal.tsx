@@ -1,12 +1,6 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useAuth } from "../context/AuthContext";
-import {
-  X,
-  Mail,
-  Lock,
-  User as UserIcon,
-  AlertTriangle,
-} from "lucide-react";
+import { X, Mail, Lock, Eye, EyeOff, AlertTriangle } from "lucide-react";
 import { UnauthorizedDomainAlert } from "./UnauthorizedDomainAlert";
 import { OperationNotAllowedAlert } from "./OperationNotAllowedAlert";
 
@@ -16,6 +10,8 @@ interface AuthModalProps {
 }
 
 export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const {
     user,
     signInWithGoogle,
@@ -30,18 +26,28 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
   const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
 
-  if (!isOpen) return null;
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+
+    if (isOpen && !dialog.open) {
+      dialog.showModal();
+    } else if (!isOpen && dialog.open) {
+      dialog.close();
+    }
+  }, [isOpen]);
 
   const isUnauthorizedDomain =
     errorCode === "auth/unauthorized-domain" ||
-    (error && error.toLowerCase().includes("unauthorized-domain"));
+    Boolean(error && error.toLowerCase().includes("unauthorized-domain"));
 
   const isOperationNotAllowed =
     errorCode === "auth/operation-not-allowed" ||
-    (error && error.toLowerCase().includes("operation-not-allowed"));
+    Boolean(error && error.toLowerCase().includes("operation-not-allowed"));
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -66,9 +72,14 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
         await signInWithEmail(email, password);
       }
       onClose();
-    } catch (err: any) {
-      if (err.code !== "auth/unauthorized-domain") {
-        setLocalError(err.message || "Authentication failed");
+    } catch (err: unknown) {
+      const code = (err as { code?: string })?.code;
+      const msg = err instanceof Error ? err.message : "Authentication failed";
+      if (
+        code !== "auth/unauthorized-domain" &&
+        code !== "auth/operation-not-allowed"
+      ) {
+        setLocalError(msg);
       }
     } finally {
       setIsSubmitting(false);
@@ -82,116 +93,127 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
     try {
       await signInWithGoogle();
       onClose();
-    } catch (err: any) {
-      if (err.code !== "auth/unauthorized-domain") {
-        setLocalError(err.message || "Google sign in failed");
+    } catch (err: unknown) {
+      const code = (err as { code?: string })?.code;
+      const msg = err instanceof Error ? err.message : "Google sign in failed";
+      if (
+        code !== "auth/unauthorized-domain" &&
+        code !== "auth/operation-not-allowed"
+      ) {
+        setLocalError(msg);
       }
     } finally {
       setIsSubmitting(false);
     }
   };
 
+  const handleBackdropClick = (e: React.MouseEvent<HTMLDialogElement>) => {
+    if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
+      onClose();
+    }
+  };
+
   return (
-    <div
-      id="auth-modal-backdrop"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4"
-      onClick={onClose}
+    <dialog
+      ref={dialogRef}
+      id="auth-modal-dialog"
+      aria-labelledby="auth-modal-title"
+      onCancel={(e) => {
+        e.preventDefault();
+        onClose();
+      }}
+      onClick={handleBackdropClick}
+      className="paper-dialog m-0 p-4 border-0 bg-transparent max-w-none max-h-none w-screen h-[100svh] open:flex items-center justify-center"
     >
       <div
-        id="auth-modal-dialog"
-        className="w-full max-w-md bg-white dark:bg-neutral-900 rounded-2xl shadow-xl border border-neutral-200 dark:border-neutral-800 overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
+        ref={panelRef}
+        className="w-full max-w-md rounded-2xl bg-[#FAF9F6] dark:bg-[#1B1B19] text-[#1C1917] dark:text-[#EDEDEB] border border-[#E7E5E0] dark:border-[#2E2E2A] shadow-2xl overflow-hidden"
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-neutral-100 dark:border-neutral-800 bg-neutral-50/50 dark:bg-neutral-850">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-neutral-900 dark:bg-neutral-100 text-amber-400 dark:text-neutral-950 flex items-center justify-center font-bold text-sm">
-              M
-            </div>
-            <div>
-              <h2 className="text-base font-semibold text-neutral-900 dark:text-white">
-                {user
-                  ? "Account Management"
-                  : isSignUp
-                    ? "Create MemoFlow Account"
-                    : "Sign In to MemoFlow"}
-              </h2>
-              <p className="text-xs text-neutral-500 dark:text-neutral-400">
-                {user
-                  ? `Signed in as ${user.email || "Account"}`
-                  : "Sync notes in real-time across devices"}
-              </p>
-            </div>
+        <div className="flex items-center justify-between px-6 py-4 border-b border-[#E7E5E0] dark:border-[#282825]">
+          <div>
+            <h1 id="auth-modal-title" className="text-base font-semibold">
+              {user
+                ? "Account"
+                : isSignUp
+                  ? "Create Account"
+                  : "Sign In to Sync"}
+            </h1>
+            <p className="text-xs text-[#78716C] dark:text-[#8A8985] mt-0.5">
+              {user
+                ? `Signed in as ${user.email || "Account"}`
+                : "Local notes move automatically to your account on sign-in."}
+            </p>
           </div>
           <button
             id="close-auth-modal-btn"
+            type="button"
             onClick={onClose}
-            className="p-1 rounded-lg text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors"
+            aria-label="Close account modal"
+            className="p-1.5 rounded-lg text-[#78716C] dark:text-[#8A8985] hover:text-[#1C1917] dark:hover:text-[#EDEDEB] hover:bg-black/5 dark:hover:bg-white/5 transition-colors cursor-pointer"
           >
-            <X className="w-5 h-5" />
+            <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Content */}
         <div className="p-6">
-          {/* Unauthorized Domain Alert */}
           {isUnauthorizedDomain && (
             <div className="mb-4">
               <UnauthorizedDomainAlert onDismiss={clearError} />
             </div>
           )}
 
-          {/* Operation Not Allowed Alert */}
           {isOperationNotAllowed && (
             <div className="mb-4">
               <OperationNotAllowedAlert onDismiss={clearError} />
             </div>
           )}
 
-          {!isUnauthorizedDomain && !isOperationNotAllowed && (error || localError) && (
-            <div className="mb-4 p-3 rounded-lg bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 text-rose-700 dark:text-rose-300 text-xs flex items-start gap-2">
-              <AlertTriangle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
-              <span>{localError || error}</span>
-            </div>
-          )}
+          {!isUnauthorizedDomain &&
+            !isOperationNotAllowed &&
+            (error || localError) && (
+              <div className="mb-4 p-3 rounded-lg bg-rose-500/10 border border-rose-500/20 text-rose-700 dark:text-rose-300 text-xs flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
+                <span>{localError || error}</span>
+              </div>
+            )}
 
           {user ? (
             <div className="space-y-4 text-center">
-              <div className="w-16 h-16 mx-auto rounded-full bg-amber-100 text-neutral-900 flex items-center justify-center text-xl font-bold">
+              <div className="w-14 h-14 mx-auto rounded-full bg-[#EFECE4] dark:bg-[#282825] flex items-center justify-center text-lg font-semibold">
                 {user.email ? user.email[0].toUpperCase() : "U"}
               </div>
               <div>
-                <p className="text-sm font-medium text-neutral-900 dark:text-white">
+                <p className="text-sm font-medium">
                   {user.email || "Authenticated User"}
                 </p>
-                <p className="text-xs text-neutral-500 font-mono mt-0.5">
-                  UID: {user.uid.slice(0, 12)}...
+                <p className="text-xs text-[#78716C] dark:text-[#8A8985] font-mono mt-0.5">
+                  UID: {user.uid.slice(0, 12)}…
                 </p>
               </div>
-              <div className="pt-2 flex flex-col gap-2">
-                <button
-                  id="sign-out-btn"
-                  onClick={async () => {
-                    await logout();
-                    onClose();
-                  }}
-                  className="w-full py-2.5 px-4 rounded-xl bg-neutral-100 hover:bg-neutral-200 dark:bg-neutral-800 dark:hover:bg-neutral-700 text-neutral-700 dark:text-neutral-200 text-sm font-medium transition-colors cursor-pointer"
-                >
-                  Sign Out
-                </button>
-              </div>
+              <button
+                id="sign-out-btn"
+                type="button"
+                onClick={async () => {
+                  await logout();
+                  onClose();
+                }}
+                className="w-full py-2.5 px-4 rounded-xl bg-[#EFECE4] hover:bg-[#E7E3D8] dark:bg-[#282825] dark:hover:bg-[#32322E] text-sm font-medium transition-colors cursor-pointer"
+              >
+                Sign Out
+              </button>
             </div>
           ) : (
             <div className="space-y-4">
-              {/* Google Sign In */}
               <button
                 id="google-sign-in-btn"
                 type="button"
                 onClick={handleGoogleSignIn}
                 disabled={isSubmitting}
-                className="w-full flex items-center justify-center gap-3 py-2.5 px-4 rounded-xl border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800 text-neutral-700 dark:text-neutral-200 font-medium text-sm hover:bg-neutral-50 dark:hover:bg-neutral-750 transition-all shadow-xs cursor-pointer"
+                className="w-full flex items-center justify-center gap-3 py-2.5 px-4 rounded-xl border border-[#E7E5E0] dark:border-[#33332F] bg-white dark:bg-[#222220] text-sm font-medium hover:bg-[#F4F2EC] dark:hover:bg-[#2A2A27] transition-colors disabled:opacity-60 cursor-pointer"
               >
-                <svg className="w-4 h-4" viewBox="0 0 24 24">
+                <svg className="w-4 h-4" viewBox="0 0 24 24" aria-hidden="true">
                   <path
                     fill="#4285F4"
                     d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
@@ -209,25 +231,27 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
                     d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
                   />
                 </svg>
-                Continue with Google
+                <span>Continue with Google</span>
               </button>
 
-              <div className="flex items-center my-3">
-                <div className="flex-1 border-t border-neutral-200 dark:border-neutral-800"></div>
-                <span className="px-3 text-xs text-neutral-400 uppercase tracking-wider">
+              <div className="flex items-center my-2">
+                <div className="flex-1 border-t border-[#E7E5E0] dark:border-[#282825]" />
+                <span className="px-3 text-[11px] text-[#78716C] dark:text-[#8A8985] uppercase tracking-wider">
                   or with email
                 </span>
-                <div className="flex-1 border-t border-neutral-200 dark:border-neutral-800"></div>
+                <div className="flex-1 border-t border-[#E7E5E0] dark:border-[#282825]" />
               </div>
 
-              {/* Email Form */}
               <form onSubmit={handleSubmit} className="space-y-3">
                 <div>
-                  <label className="block text-xs font-medium text-neutral-700 dark:text-neutral-300 mb-1">
+                  <label
+                    htmlFor="auth-email-input"
+                    className="block text-xs font-medium text-[#57534E] dark:text-[#B8B6B0] mb-1"
+                  >
                     Email address
                   </label>
                   <div className="relative">
-                    <Mail className="w-4 h-4 text-neutral-400 absolute left-3 top-3" />
+                    <Mail className="w-4 h-4 text-[#78716C] absolute left-3 top-2.5" />
                     <input
                       id="auth-email-input"
                       type="email"
@@ -235,26 +259,43 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                       placeholder="you@example.com"
-                      className="w-full pl-9 pr-3 py-2 text-sm bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 text-neutral-900 dark:text-white rounded-lg focus:outline-hidden focus:ring-2 focus:ring-neutral-900 dark:focus:ring-neutral-200 transition-all"
+                      className="w-full pl-9 pr-3 py-2 text-sm bg-white dark:bg-[#222220] border border-[#E7E5E0] dark:border-[#33332F] rounded-lg outline-hidden focus:border-amber-500 transition-colors"
                     />
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-medium text-neutral-700 dark:text-neutral-300 mb-1">
+                  <label
+                    htmlFor="auth-password-input"
+                    className="block text-xs font-medium text-[#57534E] dark:text-[#B8B6B0] mb-1"
+                  >
                     Password
                   </label>
                   <div className="relative">
-                    <Lock className="w-4 h-4 text-neutral-400 absolute left-3 top-3" />
+                    <Lock className="w-4 h-4 text-[#78716C] absolute left-3 top-2.5" />
                     <input
                       id="auth-password-input"
-                      type="password"
+                      type={showPassword ? "text" : "password"}
                       required
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       placeholder="••••••••"
-                      className="w-full pl-9 pr-3 py-2 text-sm bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 text-neutral-900 dark:text-white rounded-lg focus:outline-hidden focus:ring-2 focus:ring-neutral-900 dark:focus:ring-neutral-200 transition-all"
+                      className="w-full pl-9 pr-9 py-2 text-sm bg-white dark:bg-[#222220] border border-[#E7E5E0] dark:border-[#33332F] rounded-lg outline-hidden focus:border-amber-500 transition-colors"
                     />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword((v) => !v)}
+                      aria-label={
+                        showPassword ? "Hide password" : "Show password"
+                      }
+                      className="absolute right-2.5 top-2 p-0.5 text-[#78716C] hover:text-[#1C1917] dark:hover:text-[#EDEDEB] cursor-pointer"
+                    >
+                      {showPassword ? (
+                        <EyeOff className="w-4 h-4" />
+                      ) : (
+                        <Eye className="w-4 h-4" />
+                      )}
+                    </button>
                   </div>
                 </div>
 
@@ -262,25 +303,26 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
                   id="submit-auth-form-btn"
                   type="submit"
                   disabled={isSubmitting}
-                  className="w-full py-2.5 px-4 bg-neutral-900 hover:bg-neutral-800 dark:bg-white dark:hover:bg-neutral-100 text-white dark:text-neutral-900 font-medium text-sm rounded-xl transition-colors shadow-xs cursor-pointer"
+                  className="w-full py-2.5 px-4 bg-[#1C1917] hover:opacity-90 dark:bg-[#EDEDEB] text-[#FAF9F6] dark:text-[#141413] font-medium text-sm rounded-xl transition-opacity disabled:opacity-60 cursor-pointer"
                 >
                   {isSubmitting
-                    ? "Please wait..."
+                    ? "Please wait…"
                     : isSignUp
                       ? "Create Account"
                       : "Sign In"}
                 </button>
               </form>
 
-              <div className="pt-2 flex items-center justify-between text-xs text-neutral-500 dark:text-neutral-400">
+              <div className="pt-1 text-center text-xs text-[#78716C] dark:text-[#8A8985]">
                 <button
                   id="toggle-signup-mode-btn"
                   type="button"
                   onClick={() => {
-                    setIsSignUp(!isSignUp);
+                    setIsSignUp((v) => !v);
                     setLocalError(null);
+                    clearError();
                   }}
-                  className="hover:text-neutral-900 dark:hover:text-white hover:underline cursor-pointer"
+                  className="hover:text-[#1C1917] dark:hover:text-[#EDEDEB] hover:underline cursor-pointer"
                 >
                   {isSignUp
                     ? "Already have an account? Sign in"
@@ -291,7 +333,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose }) => {
           )}
         </div>
       </div>
-    </div>
+    </dialog>
   );
 };
-

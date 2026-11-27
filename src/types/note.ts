@@ -18,9 +18,3 @@ export type NoteFilter = {
   onlyPinned: boolean;
   searchQuery: string;
 };
-
-export interface NotebookFolder {
-  id: string;
-  name: string;
-  icon?: string;
-}

@@ -2,71 +2,33 @@ import React, { useState, useEffect, useCallback } from "react";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { ThemeProvider } from "./context/ThemeContext";
 import { useNotes } from "./hooks/useNotes";
-import { Sidebar } from "./components/Sidebar";
-import { NotesList } from "./components/NotesList";
-import { EditorSplitView } from "./components/EditorSplitView";
+import {
+  EditorView,
+  EditorViewMode,
+  downloadNoteAsMarkdown,
+} from "./components/EditorView";
+import { NavigationDrawer } from "./components/NavigationDrawer";
+import { CommandPalette } from "./components/CommandPalette";
 import { AuthModal } from "./components/AuthModal";
-import { SignInPage } from "./components/SignInPage";
 import {
   ConfirmDeleteModal,
   DeleteTarget,
 } from "./components/ConfirmDeleteModal";
-import { Menu, Plus, WifiOff, AlertCircle } from "lucide-react";
-
-const INITIAL_WELCOME_NOTE = {
-  title: "🚀 Welcome to MemoFlow",
-  content: `# Welcome to MemoFlow!
-
-MemoFlow is your fast, minimal Markdown note-taking workspace with **instant real-time syncing** powered by Firebase Firestore.
-
----
-
-### ✨ Key Features:
-- **Auto-Save with 500ms Debounce**: Never lose a thought. Every keystroke syncs automatically in the background.
-- **Real-Time onSnapshot**: Live synchronization across desktop and mobile tabs.
-- **Split Markdown Layout**: Live preview rendered in real-time as you write.
-- **Organization**: Categorize notes into notebook folders and filter by #tags.
-- **Pinning**: Star important notes to keep them pinned at the top.
-
----
-
-### 📝 Markdown Cheat Sheet:
-- **Bold text**: \`**bold**\`
-- *Italic text*: \`*italic*\`
-- > Blockquote: Start line with \`> \`
-- \`inline code\`: Wrap in single backticks
-- Code blocks:
-\`\`\`typescript
-const sync = async (note: Note) => {
-  await updateDoc(doc(db, 'notes', note.id), note);
-};
-\`\`\`
-
-- [x] Create first note
-- [ ] Try keyboard shortcut **⌘ + N** for a new note
-- [ ] Try **⌘ + S** to force immediate save
-
-Happy writing!`,
-  tags: ["getting-started", "guide"],
-  folder: "General",
-  isPinned: true,
-};
+import { WifiOff, AlertCircle } from "lucide-react";
+import { INITIAL_WELCOME_NOTE } from "./utils/welcomeNote";
 
 function MemoFlowWorkspace() {
   const { user, loading: authLoading } = useAuth();
   const {
     notes,
-    filteredNotes,
-    parsedSearch,
     activeNote,
     activeNoteId,
     setActiveNoteId,
     loading: notesLoading,
+    isMigrating,
     error: notesError,
     syncStatus,
     isOnline,
-    filter,
-    setFilter,
     allTags,
     allFolders,
     addFolder,
@@ -79,94 +41,93 @@ function MemoFlowWorkspace() {
     clearError,
   } = useNotes();
 
+  const [viewMode, setViewMode] = useState<EditorViewMode>("editor");
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
-  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
-  const welcomeSeededRef = React.useRef(false);
-
-  // Sidebar collapse state (persisted in localStorage)
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem("memoflow_sidebar_collapsed") === "true";
-    } catch {
-      return false;
-    }
-  });
-
-  const handleToggleSidebarCollapse = useCallback(() => {
-    setIsSidebarCollapsed((prev) => {
-      const next = !prev;
-      try {
-        localStorage.setItem("memoflow_sidebar_collapsed", String(next));
-      } catch {}
-      return next;
-    });
-  }, []);
-
-  // Delete modal state
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const welcomeSeededRef = React.useRef(false);
 
-  // Seed initial welcome note if signed-in user has zero notes and both auth and notes have finished loading
+  // Seed initial welcome note if signed-in user has zero notes after auth, notes, and migration finish
   useEffect(() => {
     if (
       !notesLoading &&
       !authLoading &&
+      !isMigrating &&
       user &&
       notes.length === 0 &&
       !welcomeSeededRef.current
     ) {
       welcomeSeededRef.current = true;
-      createNote(INITIAL_WELCOME_NOTE);
+      void createNote(INITIAL_WELCOME_NOTE);
     }
-  }, [notesLoading, authLoading, user, notes.length, createNote]);
+  }, [notesLoading, authLoading, isMigrating, user, notes.length, createNote]);
 
-  // Global keyboard shortcuts (Cmd+N, Cmd+\ to toggle sidebar)
+  const handleTogglePreview = useCallback(() => {
+    setViewMode((prev) => (prev === "preview" ? "editor" : "preview"));
+  }, []);
+
+  const handleCreateNewNote = useCallback(
+    async (folder?: string) => {
+      await createNote(folder ? { folder } : undefined);
+      setViewMode("editor");
+    },
+    [createNote],
+  );
+
+  // Global keyboard shortcuts: Cmd/Ctrl+K (Palette), Cmd/Ctrl+\ (Drawer), Cmd/Ctrl+N (New), Cmd/Ctrl+E (Preview)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const isCmdOrCtrl = e.metaKey || e.ctrlKey;
-      if (isCmdOrCtrl && e.key.toLowerCase() === "n") {
+      if (!isCmdOrCtrl) return;
+
+      const key = e.key.toLowerCase();
+      if (key === "k") {
         e.preventDefault();
-        createNote();
-      } else if (isCmdOrCtrl && e.key === "\\") {
+        setIsDrawerOpen(false);
+        setIsCommandPaletteOpen((prev) => !prev);
+      } else if (e.key === "\\") {
         e.preventDefault();
-        handleToggleSidebarCollapse();
+        setIsCommandPaletteOpen(false);
+        setIsDrawerOpen((prev) => !prev);
+      } else if (key === "n") {
+        e.preventDefault();
+        void handleCreateNewNote();
+      } else if (key === "e") {
+        e.preventDefault();
+        handleTogglePreview();
       }
     };
+
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [createNote, handleToggleSidebarCollapse]);
+  }, [handleCreateNewNote, handleTogglePreview]);
 
-  const handleCreateNewNote = async () => {
-    const newId = await createNote();
-    if (newId) {
-      setIsMobileSidebarOpen(false);
-    }
-  };
+  const handleRequestDeleteNote = useCallback(
+    (noteId: string, e?: React.MouseEvent) => {
+      if (e) e.stopPropagation();
+      const target = notes.find((n) => n.id === noteId);
+      setDeleteTarget({
+        type: "note",
+        id: noteId,
+        title: target?.title || "Untitled Note",
+      });
+    },
+    [notes],
+  );
 
-  // Open note delete confirmation modal
-  const handleRequestDeleteNote = (noteId: string, e?: React.MouseEvent) => {
-    if (e) e.stopPropagation();
-    const target = notes.find((n) => n.id === noteId);
-    setDeleteTarget({
-      type: "note",
-      id: noteId,
-      title: target?.title || "Untitled Note",
-    });
-  };
+  const handleRequestDeleteFolder = useCallback(
+    (folderName: string, notesCount: number) => {
+      setDeleteTarget({
+        type: "folder",
+        name: folderName,
+        notesCount,
+      });
+    },
+    [],
+  );
 
-  // Open folder delete confirmation modal
-  const handleRequestDeleteFolder = (
-    folderName: string,
-    notesCount: number,
-  ) => {
-    setDeleteTarget({
-      type: "folder",
-      name: folderName,
-      notesCount,
-    });
-  };
-
-  // Confirm delete handler (works for both note and folder)
   const handleConfirmDelete = async () => {
     if (!deleteTarget) return;
     setIsDeleting(true);
@@ -184,127 +145,104 @@ function MemoFlowWorkspace() {
     }
   };
 
-  const handleTogglePinNote = async (noteId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    await togglePin(noteId);
-  };
+  const handleTogglePinNote = useCallback(
+    async (noteId: string, e: React.MouseEvent) => {
+      e.stopPropagation();
+      await togglePin(noteId);
+    },
+    [togglePin],
+  );
+
+  const handleExportActiveNote = useCallback(() => {
+    if (!activeNote) return;
+    downloadNoteAsMarkdown(activeNote.title, activeNote.content);
+  }, [activeNote]);
 
   return (
-    <div className="flex flex-col h-screen w-screen overflow-hidden bg-neutral-100 font-sans text-neutral-900">
-      {/* Offline Alert Strip */}
+    <div className="flex flex-col h-[100svh] w-screen overflow-hidden bg-[#FAF9F6] dark:bg-[#141413] text-[#1C1917] dark:text-[#EDEDEB]">
+      {/* Subtle Offline Strip */}
       {!isOnline && (
         <div
           id="offline-banner"
-          className="bg-neutral-900 text-amber-300 text-xs px-4 py-1.5 flex items-center justify-center gap-2 border-b border-neutral-800 shrink-0"
+          className="bg-[#1C1917] dark:bg-[#222220] text-amber-300 text-xs px-4 py-1.5 flex items-center justify-center gap-2 shrink-0"
         >
-          <WifiOff className="w-3.5 h-3.5" />
+          <WifiOff className="w-3.5 h-3.5 shrink-0" />
           <span>
-            You are currently offline. Edits are safely stored locally and will
-            sync once reconnected.
+            Offline — edits are cached locally and will sync when reconnected.
           </span>
         </div>
       )}
 
-      {/* Error Alert Strip */}
+      {/* Subtle Error Strip */}
       {notesError && (
         <div
           id="notes-error-banner"
           className="bg-rose-600 text-white text-xs px-4 py-1.5 flex items-center justify-between gap-2 shrink-0"
         >
-          <div className="flex items-center gap-2">
-            <AlertCircle className="w-3.5 h-3.5" />
-            <span>{notesError}</span>
+          <div className="flex items-center gap-2 min-w-0">
+            <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+            <span className="truncate">{notesError}</span>
           </div>
           <button
+            type="button"
             onClick={clearError}
-            className="text-white/80 hover:text-white underline text-[11px]"
+            className="text-white/85 hover:text-white underline text-[11px] shrink-0 cursor-pointer"
           >
             Dismiss
           </button>
         </div>
       )}
 
-      {/* Mobile Top Navbar */}
-      <header className="md:hidden h-12 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-white px-4 flex items-center justify-between shrink-0 border-b border-neutral-200 dark:border-neutral-800 transition-colors">
-        <div className="flex items-center gap-2.5">
-          <button
-            id="mobile-sidebar-toggle-btn"
-            onClick={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
-            className="p-1.5 text-neutral-600 hover:text-neutral-900 dark:text-neutral-300 dark:hover:text-white rounded-md"
-            title="Open navigation"
-          >
-            <Menu className="w-5 h-5" />
-          </button>
-          <span className="font-bold text-sm tracking-tight">MemoFlow</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            id="mobile-create-note-btn"
-            onClick={handleCreateNewNote}
-            className="p-1.5 bg-amber-400 text-neutral-950 rounded-lg text-xs font-semibold flex items-center gap-1"
-            title="New note"
-          >
-            <Plus className="w-4 h-4" />
-          </button>
-        </div>
-      </header>
+      {/* 1-Pane Paper Calm Editor */}
+      <EditorView
+        note={activeNote}
+        viewMode={viewMode}
+        onChangeViewMode={setViewMode}
+        onUpdateNote={updateNote}
+        onSaveImmediate={saveNoteImmediate}
+        onTogglePin={togglePin}
+        onDeleteNote={(id) => handleRequestDeleteNote(id)}
+        onCreateNote={handleCreateNewNote}
+        onOpenDrawer={() => setIsDrawerOpen(true)}
+        onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
+        syncStatus={syncStatus}
+        isCloudSynced={Boolean(user)}
+        allFolders={allFolders}
+        errorMessage={notesError}
+      />
 
-      {/* Main Workspace Layout: Sidebar + NotesList + Split Editor */}
-      <div className="flex-1 flex overflow-hidden relative">
-        {/* Sidebar */}
-        <Sidebar
-          notes={notes}
-          filter={filter}
-          setFilter={setFilter}
-          allTags={allTags}
-          allFolders={allFolders}
-          onCreateNote={handleCreateNewNote}
-          onOpenAuth={() => setIsAuthModalOpen(true)}
-          isMobileOpen={isMobileSidebarOpen}
-          onCloseMobile={() => setIsMobileSidebarOpen(false)}
-          isCollapsed={isSidebarCollapsed}
-          onToggleCollapse={handleToggleSidebarCollapse}
-          onAddFolder={addFolder}
-          onRequestDeleteFolder={handleRequestDeleteFolder}
-        />
+      {/* Slide-out Navigation Drawer (VS Code Explorer Tree) */}
+      <NavigationDrawer
+        isOpen={isDrawerOpen}
+        onClose={() => setIsDrawerOpen(false)}
+        notes={notes}
+        activeNoteId={activeNoteId}
+        allFolders={allFolders}
+        allTags={allTags}
+        onSelectNote={(id) => setActiveNoteId(id)}
+        onCreateNote={handleCreateNewNote}
+        onDeleteNote={handleRequestDeleteNote}
+        onTogglePin={handleTogglePinNote}
+        onAddFolder={addFolder}
+        onRequestDeleteFolder={handleRequestDeleteFolder}
+        onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
+        onOpenAuth={() => setIsAuthModalOpen(true)}
+      />
 
-        {/* Mobile backdrop for sidebar drawer */}
-        {isMobileSidebarOpen && (
-          <div
-            className="md:hidden fixed inset-0 z-20 bg-black/50"
-            onClick={() => setIsMobileSidebarOpen(false)}
-          />
-        )}
+      {/* Cmd+K Command Palette & Quick Switcher */}
+      <CommandPalette
+        isOpen={isCommandPaletteOpen}
+        onClose={() => setIsCommandPaletteOpen(false)}
+        notes={notes}
+        activeNote={activeNote}
+        onSelectNote={(id) => setActiveNoteId(id)}
+        onCreateNote={handleCreateNewNote}
+        onTogglePreview={handleTogglePreview}
+        onOpenDrawer={() => setIsDrawerOpen(true)}
+        onExportActiveNote={handleExportActiveNote}
+      />
 
-        {/* Middle Column: Notes List */}
-        <NotesList
-          notes={filteredNotes}
-          activeNoteId={activeNoteId}
-          onSelectNote={(id) => setActiveNoteId(id)}
-          onTogglePin={handleTogglePinNote}
-          onDeleteNote={(id, e) => handleRequestDeleteNote(id, e)}
-          onCreateNote={handleCreateNewNote}
-          filter={filter}
-          setFilter={setFilter}
-          isSidebarCollapsed={isSidebarCollapsed}
-          onToggleSidebarCollapse={handleToggleSidebarCollapse}
-          parsedSearch={parsedSearch}
-        />
-
-        {/* Right Area: Markdown Editor + Live Rendered Preview */}
-        <EditorSplitView
-          note={activeNote}
-          onUpdateNote={updateNote}
-          onSaveImmediate={saveNoteImmediate}
-          onTogglePin={togglePin}
-          onDeleteNote={(id) => handleRequestDeleteNote(id)}
-          syncStatus={syncStatus}
-          allFolders={allFolders}
-          errorMessage={notesError}
-        />
-      </div>
-
-      {/* Custom Confirmation Modal for Deleting Notes & Folders */}
+      {/* Confirmation Modal for Deleting Notes & Folders */}
       <ConfirmDeleteModal
         isOpen={Boolean(deleteTarget)}
         target={deleteTarget}
@@ -324,57 +262,18 @@ function MemoFlowWorkspace() {
   );
 }
 
-// Persisted marker for the account-less, browser-local workspace.
-const GUEST_MODE_STORAGE_KEY = "memoflow_guest_mode";
-
-function readGuestMode(): boolean {
-  try {
-    return localStorage.getItem(GUEST_MODE_STORAGE_KEY) === "true";
-  } catch {
-    return false;
-  }
-}
-
-function writeGuestMode(enabled: boolean): void {
-  try {
-    if (enabled) {
-      localStorage.setItem(GUEST_MODE_STORAGE_KEY, "true");
-    } else {
-      localStorage.removeItem(GUEST_MODE_STORAGE_KEY);
-    }
-  } catch {
-    // Storage unavailable (private browsing): the workspace still works for this session.
-  }
-}
-
 function AppRoot() {
-  const { user, loading } = useAuth();
-  const [isGuestMode, setIsGuestMode] = useState<boolean>(readGuestMode);
-
-  // A real session supersedes the local workspace, so signing out leads back to sign-in.
-  useEffect(() => {
-    if (user && isGuestMode) {
-      writeGuestMode(false);
-      setIsGuestMode(false);
-    }
-  }, [user, isGuestMode]);
-
-  const handleContinueAsGuest = useCallback(() => {
-    writeGuestMode(true);
-    setIsGuestMode(true);
-  }, []);
+  const { loading } = useAuth();
 
   if (loading) {
     return (
-      <div className="h-screen w-screen flex flex-col items-center justify-center bg-neutral-50 dark:bg-neutral-950 text-neutral-900 dark:text-neutral-100">
-        <div className="w-9 h-9 border-3 border-amber-400 border-t-transparent rounded-full animate-spin mb-3" />
-        <p className="text-xs font-medium text-neutral-500 dark:text-neutral-400">Loading MemoFlow...</p>
+      <div className="h-[100svh] w-screen flex flex-col items-center justify-center bg-[#FAF9F6] dark:bg-[#141413] text-[#1C1917] dark:text-[#EDEDEB]">
+        <div className="w-7 h-7 border-2 border-[#78716C]/40 border-t-[#1C1917] dark:border-t-[#EDEDEB] rounded-full animate-spin mb-3" />
+        <p className="text-xs text-[#78716C] dark:text-[#8A8985]">
+          Opening MemoFlow…
+        </p>
       </div>
     );
-  }
-
-  if (!user && !isGuestMode) {
-    return <SignInPage onContinueAsGuest={handleContinueAsGuest} />;
   }
 
   return <MemoFlowWorkspace />;
