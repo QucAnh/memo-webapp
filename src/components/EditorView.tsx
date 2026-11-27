@@ -54,6 +54,7 @@ interface EditorViewProps {
   syncStatus: SyncStatus;
   isCloudSynced: boolean;
   allFolders: string[];
+  allTags: string[];
   errorMessage?: string | null;
 }
 
@@ -83,11 +84,13 @@ export const EditorView: React.FC<EditorViewProps> = ({
   syncStatus,
   isCloudSynced,
   allFolders,
+  allTags,
   errorMessage,
 }) => {
   const [copied, setCopied] = useState(false);
   const [tagInput, setTagInput] = useState("");
   const [showTagInput, setShowTagInput] = useState(false);
+  const [tagActiveIndex, setTagActiveIndex] = useState(0);
   const [showFormatting, setShowFormatting] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [folderMenuOpen, setFolderMenuOpen] = useState(false);
@@ -100,9 +103,15 @@ export const EditorView: React.FC<EditorViewProps> = ({
   const [localTags, setLocalTags] = useState<string[]>([]);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const previewScrollRef = useRef<HTMLDivElement>(null);
+  const scrollSourceRef = useRef<"editor" | "preview" | null>(null);
+  const scrollLockTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   const currentNoteIdRef = useRef<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const folderMenuRef = useRef<HTMLDivElement>(null);
+  const tagPickerRef = useRef<HTMLDivElement>(null);
   const fadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Sync local mirror state whenever active note changes
@@ -153,7 +162,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
 
   // Close popovers on outside click or Escape
   useEffect(() => {
-    if (!menuOpen && !folderMenuOpen) return;
+    if (!menuOpen && !folderMenuOpen && !showTagInput) return;
     const handlePointerDown = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
         setMenuOpen(false);
@@ -164,11 +173,20 @@ export const EditorView: React.FC<EditorViewProps> = ({
       ) {
         setFolderMenuOpen(false);
       }
+      if (
+        tagPickerRef.current &&
+        !tagPickerRef.current.contains(e.target as Node)
+      ) {
+        setShowTagInput(false);
+        setTagInput("");
+      }
     };
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         setMenuOpen(false);
         setFolderMenuOpen(false);
+        setShowTagInput(false);
+        setTagInput("");
       }
     };
     document.addEventListener("mousedown", handlePointerDown);
@@ -177,7 +195,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
       document.removeEventListener("mousedown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [menuOpen, folderMenuOpen]);
+  }, [menuOpen, folderMenuOpen, showTagInput]);
 
   // Typing-focus fade: gently dim header/footer after 1.5s of typing, restore on pointer move
   const triggerTypingFocus = useCallback(() => {
@@ -198,8 +216,37 @@ export const EditorView: React.FC<EditorViewProps> = ({
   useEffect(() => {
     return () => {
       if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current);
+      if (scrollLockTimerRef.current) clearTimeout(scrollLockTimerRef.current);
     };
   }, []);
+
+  // Bidirectional proportional scroll sync for Split mode
+  const syncSplitScroll = useCallback(
+    (source: "editor" | "preview") => {
+      if (viewMode !== "split") return;
+      if (scrollSourceRef.current && scrollSourceRef.current !== source) return;
+
+      const from =
+        source === "editor" ? textareaRef.current : previewScrollRef.current;
+      const to =
+        source === "editor" ? previewScrollRef.current : textareaRef.current;
+      if (!from || !to) return;
+
+      const fromMax = from.scrollHeight - from.clientHeight;
+      const toMax = to.scrollHeight - to.clientHeight;
+      if (fromMax <= 0 || toMax <= 0) return;
+
+      scrollSourceRef.current = source;
+      const ratio = from.scrollTop / fromMax;
+      to.scrollTop = ratio * toMax;
+
+      if (scrollLockTimerRef.current) clearTimeout(scrollLockTimerRef.current);
+      scrollLockTimerRef.current = setTimeout(() => {
+        scrollSourceRef.current = null;
+      }, 60);
+    },
+    [viewMode],
+  );
 
   // Keyboard shortcut: Cmd/Ctrl+S to save immediately
   useEffect(() => {
@@ -240,17 +287,71 @@ export const EditorView: React.FC<EditorViewProps> = ({
     onUpdateNote(note.id, { folder }, 200);
   };
 
-  const handleAddTag = (e: React.KeyboardEvent | React.MouseEvent) => {
+  const addTagByName = (rawTag: string) => {
     if (!note) return;
-    if ("key" in e && e.key !== "Enter") return;
-    e.preventDefault();
-    const cleanTag = tagInput.trim().toLowerCase().replace(/^#/, "");
-    if (cleanTag && !localTags.includes(cleanTag)) {
+    const cleanTag = rawTag.trim().toLowerCase().replace(/^#/, "");
+    if (!cleanTag) return;
+    const alreadyPresent = localTags.some(
+      (t) => t.toLowerCase() === cleanTag,
+    );
+    if (!alreadyPresent) {
       const updatedTags = [...localTags, cleanTag];
       setLocalTags(updatedTags);
       onUpdateNote(note.id, { tags: updatedTags }, 200);
-      setTagInput("");
+    }
+    setTagInput("");
+    setTagActiveIndex(0);
+    setShowTagInput(false);
+  };
+
+  const normalizedTagQuery = tagInput.trim().toLowerCase().replace(/^#/, "");
+
+  const tagSuggestions = (() => {
+    const localLower = new Set(localTags.map((t) => t.toLowerCase()));
+    const available = allTags.filter((t) => !localLower.has(t.toLowerCase()));
+    if (!normalizedTagQuery) return available.slice(0, 8);
+    return available
+      .filter((t) => t.toLowerCase().includes(normalizedTagQuery))
+      .slice(0, 8);
+  })();
+
+  const canCreateTypedTag =
+    Boolean(normalizedTagQuery) &&
+    !localTags.some((t) => t.toLowerCase() === normalizedTagQuery) &&
+    !allTags.some((t) => t.toLowerCase() === normalizedTagQuery);
+
+  const tagOptions: Array<{ kind: "existing" | "create"; value: string }> = [
+    ...tagSuggestions.map((value) => ({ kind: "existing" as const, value })),
+    ...(canCreateTypedTag
+      ? [{ kind: "create" as const, value: normalizedTagQuery }]
+      : []),
+  ];
+
+  const handleTagInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (tagOptions.length > 0) {
+        setTagActiveIndex((prev) => (prev + 1) % tagOptions.length);
+      }
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (tagOptions.length > 0) {
+        setTagActiveIndex(
+          (prev) => (prev - 1 + tagOptions.length) % tagOptions.length,
+        );
+      }
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const selected = tagOptions[tagActiveIndex];
+      if (selected) {
+        addTagByName(selected.value);
+      } else if (normalizedTagQuery) {
+        addTagByName(normalizedTagQuery);
+      }
+    } else if (e.key === "Escape") {
+      e.preventDefault();
       setShowTagInput(false);
+      setTagInput("");
     }
   };
 
@@ -438,22 +539,73 @@ export const EditorView: React.FC<EditorViewProps> = ({
         </span>
       ))}
       {showTagInput ? (
-        <input
-          id="add-tag-inline-input"
-          type="text"
-          autoFocus
-          placeholder="tag + enter"
-          value={tagInput}
-          onChange={(e) => setTagInput(e.target.value)}
-          onKeyDown={handleAddTag}
-          onBlur={() => setShowTagInput(false)}
-          className="text-xs leading-5 px-2 py-0.5 rounded-md bg-transparent border border-[#E7E5E0] dark:border-[#33332F] outline-hidden w-24"
-        />
+        <div ref={tagPickerRef} className="relative">
+          <input
+            id="add-tag-inline-input"
+            type="text"
+            autoFocus
+            role="combobox"
+            aria-expanded={tagOptions.length > 0}
+            aria-autocomplete="list"
+            placeholder="Search or create tag…"
+            value={tagInput}
+            onChange={(e) => {
+              setTagInput(e.target.value);
+              setTagActiveIndex(0);
+            }}
+            onKeyDown={handleTagInputKeyDown}
+            className="text-xs leading-5 px-2 py-0.5 rounded-md bg-white dark:bg-[#222220] border border-amber-500/60 text-[#1C1917] dark:text-[#EDEDEB] outline-hidden w-36"
+          />
+
+          {tagOptions.length > 0 && (
+            <div
+              id="tag-suggestions-dropdown"
+              role="listbox"
+              aria-label="Tag suggestions"
+              className="absolute left-0 mt-1.5 w-48 max-h-48 overflow-y-auto custom-scrollbar py-1 rounded-xl bg-[#FAF9F6] dark:bg-[#1F1F1D] border border-[#E7E5E0] dark:border-[#2E2E2A] shadow-xl z-30 text-xs"
+            >
+              {tagOptions.map((opt, idx) => {
+                const isHighlighted = idx === tagActiveIndex;
+                return (
+                  <button
+                    key={`${opt.kind}-${opt.value}`}
+                    type="button"
+                    role="option"
+                    aria-selected={isHighlighted}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onMouseEnter={() => setTagActiveIndex(idx)}
+                    onClick={() => addTagByName(opt.value)}
+                    className={`w-full px-3 py-1.5 flex items-center gap-1.5 text-left transition-colors cursor-pointer ${
+                      isHighlighted
+                        ? "bg-[#EFECE4] dark:bg-[#2A2A27] text-[#1C1917] dark:text-[#EDEDEB]"
+                        : "text-[#57534E] dark:text-[#B8B6B0]"
+                    }`}
+                  >
+                    {opt.kind === "create" ? (
+                      <>
+                        <Plus className="w-3 h-3 text-amber-600 dark:text-amber-400 shrink-0" />
+                        <span className="truncate">
+                          Create <span className="font-medium">#{opt.value}</span>
+                        </span>
+                      </>
+                    ) : (
+                      <span className="truncate">#{opt.value}</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
       ) : (
         <button
           id="add-tag-chip-btn"
           type="button"
-          onClick={() => setShowTagInput(true)}
+          onClick={() => {
+            setTagInput("");
+            setTagActiveIndex(0);
+            setShowTagInput(true);
+          }}
           className="inline-flex items-center gap-0.5 text-xs leading-5 text-[#78716C]/70 dark:text-[#8A8985]/70 hover:text-[#1C1917] dark:hover:text-[#EDEDEB] px-1.5 py-0.5 rounded-md transition-colors cursor-pointer"
         >
           <Plus className="w-3 h-3" />
@@ -675,13 +827,18 @@ export const EditorView: React.FC<EditorViewProps> = ({
                   ref={textareaRef}
                   value={localContent}
                   onChange={(e) => handleContentChange(e.target.value)}
+                  onScroll={() => syncSplitScroll("editor")}
                   placeholder="Start writing…"
                   className="flex-1 px-8 py-4 text-[16px] leading-[1.78] resize-none outline-hidden border-none bg-transparent placeholder:text-[#78716C]/40 dark:placeholder:text-[#8A8985]/40 overflow-y-auto custom-scrollbar"
                   spellCheck={false}
                 />
               </div>
 
-              <div className="w-1/2 h-full overflow-y-auto custom-scrollbar px-8 py-8">
+              <div
+                ref={previewScrollRef}
+                onScroll={() => syncSplitScroll("preview")}
+                className="w-1/2 h-full overflow-y-auto custom-scrollbar px-8 py-8"
+              >
                 <MarkdownRenderer
                   content={localContent}
                   onToggleTask={(taskIndex, completed) => {
