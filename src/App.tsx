@@ -208,6 +208,7 @@ function MemoFlowWorkspace() {
         syncStatus={syncStatus}
         isCloudSynced={Boolean(user)}
         allFolders={allFolders}
+        allTags={allTags}
         errorMessage={notesError}
       />
 
