@@ -103,6 +103,11 @@ export const EditorView: React.FC<EditorViewProps> = ({
   const [localTags, setLocalTags] = useState<string[]>([]);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const previewScrollRef = useRef<HTMLDivElement>(null);
+  const scrollSourceRef = useRef<"editor" | "preview" | null>(null);
+  const scrollLockTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   const currentNoteIdRef = useRef<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const folderMenuRef = useRef<HTMLDivElement>(null);
@@ -211,8 +216,37 @@ export const EditorView: React.FC<EditorViewProps> = ({
   useEffect(() => {
     return () => {
       if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current);
+      if (scrollLockTimerRef.current) clearTimeout(scrollLockTimerRef.current);
     };
   }, []);
+
+  // Bidirectional proportional scroll sync for Split mode
+  const syncSplitScroll = useCallback(
+    (source: "editor" | "preview") => {
+      if (viewMode !== "split") return;
+      if (scrollSourceRef.current && scrollSourceRef.current !== source) return;
+
+      const from =
+        source === "editor" ? textareaRef.current : previewScrollRef.current;
+      const to =
+        source === "editor" ? previewScrollRef.current : textareaRef.current;
+      if (!from || !to) return;
+
+      const fromMax = from.scrollHeight - from.clientHeight;
+      const toMax = to.scrollHeight - to.clientHeight;
+      if (fromMax <= 0 || toMax <= 0) return;
+
+      scrollSourceRef.current = source;
+      const ratio = from.scrollTop / fromMax;
+      to.scrollTop = ratio * toMax;
+
+      if (scrollLockTimerRef.current) clearTimeout(scrollLockTimerRef.current);
+      scrollLockTimerRef.current = setTimeout(() => {
+        scrollSourceRef.current = null;
+      }, 60);
+    },
+    [viewMode],
+  );
 
   // Keyboard shortcut: Cmd/Ctrl+S to save immediately
   useEffect(() => {
@@ -793,13 +827,18 @@ export const EditorView: React.FC<EditorViewProps> = ({
                   ref={textareaRef}
                   value={localContent}
                   onChange={(e) => handleContentChange(e.target.value)}
+                  onScroll={() => syncSplitScroll("editor")}
                   placeholder="Start writing…"
                   className="flex-1 px-8 py-4 text-[16px] leading-[1.78] resize-none outline-hidden border-none bg-transparent placeholder:text-[#78716C]/40 dark:placeholder:text-[#8A8985]/40 overflow-y-auto custom-scrollbar"
                   spellCheck={false}
                 />
               </div>
 
-              <div className="w-1/2 h-full overflow-y-auto custom-scrollbar px-8 py-8">
+              <div
+                ref={previewScrollRef}
+                onScroll={() => syncSplitScroll("preview")}
+                className="w-1/2 h-full overflow-y-auto custom-scrollbar px-8 py-8"
+              >
                 <MarkdownRenderer
                   content={localContent}
                   onToggleTask={(taskIndex, completed) => {
