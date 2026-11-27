@@ -270,26 +270,38 @@ export const EditorView: React.FC<EditorViewProps> = ({
     const textarea = textareaRef.current;
     if (!textarea) return;
 
+    textarea.focus();
     const start = textarea.selectionStart;
     const end = textarea.selectionEnd;
-    const selectedText = localContent.substring(start, end) || defaultText;
+    const selectedText = textarea.value.substring(start, end) || defaultText;
     const replacement = `${prefix}${selectedText}${suffix}`;
 
-    const newContent =
-      localContent.substring(0, start) +
-      replacement +
-      localContent.substring(end);
+    // Use execCommand('insertText') so the edit is recorded on the browser's
+    // native undo/redo stack (Ctrl+Z / Ctrl+Shift+Z).
+    textarea.setSelectionRange(start, end);
+    let insertedNatively = false;
+    try {
+      insertedNatively = document.execCommand("insertText", false, replacement);
+    } catch {
+      insertedNatively = false;
+    }
 
-    setLocalContent(newContent);
-    onUpdateNote(note.id, { content: newContent }, 500);
+    if (!insertedNatively) {
+      const newContent =
+        localContent.substring(0, start) +
+        replacement +
+        localContent.substring(end);
+      setLocalContent(newContent);
+      onUpdateNote(note.id, { content: newContent }, 500);
+    }
 
-    setTimeout(() => {
+    requestAnimationFrame(() => {
       textarea.focus();
       textarea.setSelectionRange(
         start + prefix.length,
         start + prefix.length + selectedText.length,
       );
-    }, 10);
+    });
   };
 
   const handleCopyMarkdown = async () => {
@@ -308,11 +320,14 @@ export const EditorView: React.FC<EditorViewProps> = ({
   const readTimeMin = Math.max(1, Math.ceil(wordCount / 200));
 
   const syncLabel = (() => {
+    const pillBase =
+      "inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium border transition-colors";
     if (syncStatus === "error") {
       return {
         text: "Sync error · Retry",
         title: errorMessage || "Error syncing — click to retry",
-        className: "text-rose-500 hover:underline cursor-pointer",
+        dotClass: "bg-rose-500",
+        className: `${pillBase} bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/25 hover:bg-rose-500/20 cursor-pointer`,
         clickable: true,
       };
     }
@@ -320,7 +335,8 @@ export const EditorView: React.FC<EditorViewProps> = ({
       return {
         text: "Saving…",
         title: isCloudSynced ? "Saving to cloud…" : "Saving locally…",
-        className: "text-amber-600 dark:text-amber-400",
+        dotClass: "bg-amber-500 animate-pulse",
+        className: `${pillBase} bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-500/25`,
         clickable: false,
       };
     }
@@ -328,7 +344,8 @@ export const EditorView: React.FC<EditorViewProps> = ({
       return {
         text: "Offline",
         title: "Offline — edits cached locally",
-        className: "text-[#78716C] dark:text-[#8A8985]",
+        dotClass: "bg-[#78716C] dark:bg-[#8A8985]",
+        className: `${pillBase} bg-black/[0.04] dark:bg-white/[0.06] text-[#78716C] dark:text-[#8A8985] border-[#E7E5E0] dark:border-[#2E2E2A]`,
         clickable: false,
       };
     }
@@ -337,7 +354,8 @@ export const EditorView: React.FC<EditorViewProps> = ({
       title: isCloudSynced
         ? "All changes synced to cloud"
         : "Saved locally in this browser (sign in from menu to sync)",
-      className: "text-[#78716C] dark:text-[#8A8985]",
+      dotClass: "bg-emerald-500",
+      className: `${pillBase} bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border-emerald-500/25`,
       clickable: false,
     };
   })();
@@ -729,6 +747,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
           {showFormatting && viewMode !== "preview" && (
             <div
               id="markdown-formatting-toolbar"
+              onMouseDown={(e) => e.preventDefault()}
               className="px-4 py-1.5 border-t border-[#E7E5E0] dark:border-[#282825] bg-[#F4F2EC]/80 dark:bg-[#1B1B19]/90 flex items-center justify-center gap-1 overflow-x-auto no-scrollbar text-[#78716C] dark:text-[#8A8985] shrink-0"
             >
               <button
@@ -893,7 +912,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
               )}
             </div>
 
-            <div className="flex items-center gap-2 whitespace-nowrap font-mono text-[11px]">
+            <div className="flex items-center gap-2.5 whitespace-nowrap text-[11px]">
               {syncLabel.clickable ? (
                 <button
                   id="sync-status-label"
@@ -902,7 +921,8 @@ export const EditorView: React.FC<EditorViewProps> = ({
                   title={syncLabel.title}
                   className={syncLabel.className}
                 >
-                  {syncLabel.text}
+                  <span className={`w-1.5 h-1.5 rounded-full ${syncLabel.dotClass}`} />
+                  <span>{syncLabel.text}</span>
                 </button>
               ) : (
                 <span
@@ -910,11 +930,11 @@ export const EditorView: React.FC<EditorViewProps> = ({
                   title={syncLabel.title}
                   className={syncLabel.className}
                 >
-                  {syncLabel.text}
+                  <span className={`w-1.5 h-1.5 rounded-full ${syncLabel.dotClass}`} />
+                  <span>{syncLabel.text}</span>
                 </span>
               )}
-              <span className="opacity-40">&middot;</span>
-              <span>
+              <span className="font-mono">
                 {wordCount} {wordCount === 1 ? "word" : "words"} &middot;{" "}
                 {readTimeMin}m read
               </span>
