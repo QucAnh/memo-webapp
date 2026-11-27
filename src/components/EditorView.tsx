@@ -1,8 +1,10 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, lazy, Suspense } from "react";
 import { Note, SyncStatus } from "../types/note";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { toggleTaskAtIndex } from "../utils/markdown";
 import memoLogo from "../assets/MEMO.png";
+
+const EmojiPickerPopover = lazy(() => import("./EmojiPickerPopover"));
 import {
   Menu,
   Search,
@@ -35,25 +37,6 @@ import {
   Type,
   Smile,
 } from "lucide-react";
-
-const ICON_PICKER_GROUPS: Array<{ label: string; items: string[] }> = [
-  {
-    label: "Study",
-    items: ["📚", "📝", "💡", "🧠", "📖", "🎓", "🔬", "💻", "📐", "🧪", "🗂️", "✏️"],
-  },
-  {
-    label: "Status",
-    items: ["✅", "⬜", "⏳", "🔥", "🎯", "⭐", "📌", "🚀", "🏆", "💯", "🔔", "📅"],
-  },
-  {
-    label: "Callouts",
-    items: ["✨", "⚠️", "❗", "❓", "💬", "🔗", "📎", "🔑", "👉", "👀", "💭", "⚡"],
-  },
-  {
-    label: "Symbols",
-    items: ["→", "←", "↔", "⇒", "⇔", "•", "✓", "✗", "±", "≈", "≠", "∞"],
-  },
-];
 
 export type EditorViewMode = "editor" | "preview" | "split";
 
@@ -135,6 +118,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
   const folderMenuRef = useRef<HTMLDivElement>(null);
   const tagPickerRef = useRef<HTMLDivElement>(null);
   const iconPickerRef = useRef<HTMLDivElement>(null);
+  const savedSelectionRef = useRef<{ start: number; end: number } | null>(null);
   const fadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Sync local mirror state whenever active note changes
@@ -396,14 +380,15 @@ export const EditorView: React.FC<EditorViewProps> = ({
     prefix: string,
     suffix: string = "",
     defaultText: string = "",
+    selectionOverride?: { start: number; end: number } | null,
   ) => {
     if (!note) return;
     const textarea = textareaRef.current;
     if (!textarea) return;
 
     textarea.focus();
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
+    const start = selectionOverride?.start ?? textarea.selectionStart;
+    const end = selectionOverride?.end ?? textarea.selectionEnd;
     const selectedText = textarea.value.substring(start, end) || defaultText;
     const replacement = `${prefix}${selectedText}${suffix}`;
 
@@ -936,32 +921,24 @@ export const EditorView: React.FC<EditorViewProps> = ({
               {iconPickerOpen && (
                 <div
                   id="format-icon-picker-popover"
-                  onMouseDown={(e) => e.preventDefault()}
-                  className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-72 max-w-[92vw] p-3 rounded-xl bg-[#FAF9F6] dark:bg-[#1F1F1D] border border-[#E7E5E0] dark:border-[#2E2E2A] shadow-2xl z-30 space-y-2.5"
+                  className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-30"
                 >
-                  {ICON_PICKER_GROUPS.map((group) => (
-                    <div key={group.label}>
-                      <div className="text-[10px] font-medium uppercase tracking-wider text-[#78716C] dark:text-[#8A8985] mb-1">
-                        {group.label}
+                  <Suspense
+                    fallback={
+                      <div className="w-80 h-80 rounded-xl bg-[#FAF9F6] dark:bg-[#1F1F1D] border border-[#E7E5E0] dark:border-[#2E2E2A] shadow-2xl flex items-center justify-center text-xs text-[#78716C] dark:text-[#8A8985]">
+                        Loading emojis…
                       </div>
-                      <div className="grid grid-cols-6 gap-1">
-                        {group.items.map((symbol) => (
-                          <button
-                            key={symbol}
-                            type="button"
-                            onClick={() => {
-                              insertFormatting(`${symbol} `, "", "");
-                              setIconPickerOpen(false);
-                            }}
-                            title={`Insert ${symbol}`}
-                            className="h-7 rounded-md flex items-center justify-center text-sm hover:bg-black/5 dark:hover:bg-white/10 transition-colors cursor-pointer"
-                          >
-                            {symbol}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
+                    }
+                  >
+                    <EmojiPickerPopover
+                      onSelect={(emoji) => {
+                        const sel = savedSelectionRef.current;
+                        savedSelectionRef.current = null;
+                        setIconPickerOpen(false);
+                        insertFormatting(`${emoji} `, "", "", sel);
+                      }}
+                    />
+                  </Suspense>
                 </div>
               )}
 
@@ -1108,7 +1085,15 @@ export const EditorView: React.FC<EditorViewProps> = ({
               <button
                 id="format-icon-picker-btn"
                 type="button"
-                onClick={() => setIconPickerOpen((v) => !v)}
+                onClick={() => {
+                  if (!iconPickerOpen && textareaRef.current) {
+                    savedSelectionRef.current = {
+                      start: textareaRef.current.selectionStart,
+                      end: textareaRef.current.selectionEnd,
+                    };
+                  }
+                  setIconPickerOpen((v) => !v);
+                }}
                 aria-expanded={iconPickerOpen}
                 aria-label="Insert emoji or symbol"
                 className={`p-1.5 rounded transition-colors cursor-pointer ${
