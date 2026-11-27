@@ -1,11 +1,16 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
-import { getFirestore } from "firebase/firestore";
+import {
+  Firestore,
+  getFirestore,
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+} from "firebase/firestore";
 import { getAuth, GoogleAuthProvider } from "firebase/auth";
 import configJson from "../firebase-applet-config.json";
 
 // Support both environment variables (e.g., on Vercel deployment) and local config
-const env: Record<string, string | undefined> =
-  (typeof import.meta !== "undefined" && (import.meta as any)?.env) || {};
+const env: Record<string, string | undefined> = import.meta.env ?? {};
 
 export const firebaseConfig = {
   apiKey: env.VITE_FIREBASE_API_KEY || configJson.apiKey,
@@ -23,14 +28,34 @@ export const projectId = firebaseConfig.projectId;
 export const app =
   getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 
-// Initialize Firestore with specific databaseId if provided (for custom named databases)
+// Initialize Firestore with persistent IndexedDB cache (multi-tab) and optional named databaseId.
+// Falls back to getFirestore() if already initialized (e.g. during Vite HMR).
 export const firestoreDatabaseId =
   configJson.firestoreDatabaseId || "(default)";
-export const db =
-  configJson.firestoreDatabaseId &&
-  configJson.firestoreDatabaseId !== "(default)"
-    ? getFirestore(app, configJson.firestoreDatabaseId)
-    : getFirestore(app);
+
+function createFirestoreInstance(): Firestore {
+  const customDbId =
+    configJson.firestoreDatabaseId &&
+    configJson.firestoreDatabaseId !== "(default)"
+      ? configJson.firestoreDatabaseId
+      : undefined;
+
+  const settings = {
+    localCache: persistentLocalCache({
+      tabManager: persistentMultipleTabManager(),
+    }),
+  };
+
+  try {
+    return customDbId
+      ? initializeFirestore(app, settings, customDbId)
+      : initializeFirestore(app, settings);
+  } catch {
+    return customDbId ? getFirestore(app, customDbId) : getFirestore(app);
+  }
+}
+
+export const db = createFirestoreInstance();
 
 // Initialize Authentication and Providers
 export const auth = getAuth(app);

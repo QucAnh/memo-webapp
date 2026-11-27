@@ -3,11 +3,11 @@ import {
   collection,
   doc,
   setDoc,
-  updateDoc,
   deleteDoc,
   onSnapshot,
   query,
   where,
+  writeBatch,
 } from "firebase/firestore";
 import { db } from "../firebaseConfig";
 import { Note, SyncStatus, NoteFilter } from "../types/note";
@@ -19,10 +19,17 @@ import {
   addFolderToList,
   buildFolderList,
   hasFolder,
+  isFolderOrDescendant,
+  normalizeFolderPath,
   removeFolderFromList,
   selectNotesInFolder,
 } from "../utils/folders";
 import { migrateLocalNotes } from "../utils/migration";
+import {
+  createDebouncedSaveQueue,
+  DebouncedSaveQueue,
+} from "../utils/saveQueue";
+import { INITIAL_WELCOME_NOTE } from "../utils/welcomeNote";
 
 const LOCAL_STORAGE_KEY = "memoflow_local_notes_v1";
 const FOLDERS_STORAGE_KEY = "memoflow_custom_folders_v1";
@@ -42,47 +49,6 @@ function getStoredFolders(): string[] {
   return DEFAULT_FOLDERS;
 }
 
-const INITIAL_WELCOME_NOTE: Omit<Note, "id" | "userId"> = {
-  title: "🚀 Welcome to MemoFlow",
-  content: `# Welcome to MemoFlow!
-
-MemoFlow is your fast, minimal Markdown note-taking workspace with **instant real-time syncing** powered by Firebase Firestore.
-
----
-
-### ✨ Key Features:
-- **Auto-Save with 500ms Debounce**: Never lose a thought. Keystrokes sync automatically in the background.
-- **Real-Time onSnapshot**: Live synchronization across desktop and mobile tabs.
-- **Split Markdown Layout**: Live preview rendered in real-time as you write.
-- **Organization**: Categorize notes into notebook folders and filter by #tags.
-- **Pinning**: Star important notes to keep them pinned at the top.
-
----
-
-### 📝 Markdown Cheat Sheet:
-- **Bold text**: \`**bold**\`
-- *Italic text*: \`*italic*\`
-- > Blockquote: Start line with \`> \`
-- \`inline code\`: Wrap in single backticks
-- Code blocks:
-\`\`\`typescript
-const sync = async (note: Note) => {
-  await updateDoc(doc(db, 'notes', note.id), note);
-};
-\`\`\`
-
-- [x] Create first note
-- [ ] Try keyboard shortcut **⌘ + N** for a new note
-- [ ] Try **⌘ + S** to force immediate save
-
-Happy writing!`,
-  tags: ["getting-started", "guide"],
-  folder: "General",
-  isPinned: true,
-  createdAt: Date.now(),
-  updatedAt: Date.now(),
-};
-
 // Helper: load guest notes from localStorage
 function getLocalGuestNotes(): Note[] {
   try {
@@ -98,9 +64,12 @@ function getLocalGuestNotes(): Note[] {
   }
 
   // Seed default guest note
+  const now = Date.now();
   const initialNote: Note = {
     ...INITIAL_WELCOME_NOTE,
-    id: "local_welcome_" + Date.now().toString(36),
+    id: "local_welcome_" + now.toString(36),
+    createdAt: now,
+    updatedAt: now,
     userId: "guest",
   };
   try {
@@ -126,6 +95,7 @@ export function useNotes() {
   const { user, loading: authLoading } = useAuth();
   const [notes, setNotes] = useState<Note[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+  const [isMigrating, setIsMigrating] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>("saved");
   const [activeNoteId, setActiveNoteId] = useState<string | null>(null);
@@ -165,12 +135,18 @@ export function useNotes() {
   // Track folders list with persistent storage
   const [folderList, setFolderList] = useState<string[]>(getStoredFolders);
 
-  // Debounce timer and pending save ref
-  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingUpdatesRef = useRef<{
-    noteId: string;
-    updates: Partial<Note>;
-  } | null>(null);
+  // Per-note debounced save queue & active note tracking
+  const executeSaveRef = useRef<
+    (noteId: string, updates: Partial<Note>) => Promise<void>
+  >(async () => {});
+  const saveQueueRef = useRef<DebouncedSaveQueue<Note> | null>(null);
+  if (!saveQueueRef.current) {
+    saveQueueRef.current = createDebouncedSaveQueue<Note>((id, updates) =>
+      executeSaveRef.current(id, updates),
+    );
+  }
+  const activeNoteIdRef = useRef<string | null>(activeNoteId);
+  activeNoteIdRef.current = activeNoteId;
   const isMigratingRef = useRef<boolean>(false);
 
   // Synchronize with Firestore (if user signed in) OR localStorage (if guest)
@@ -209,6 +185,7 @@ export function useNotes() {
       if (!raw) return;
 
       isMigratingRef.current = true;
+      setIsMigrating(true);
       const notesCol = collection(db, "notes");
 
       try {
@@ -233,6 +210,7 @@ export function useNotes() {
         }
       } finally {
         isMigratingRef.current = false;
+        setIsMigrating(false);
       }
     };
 
@@ -297,10 +275,7 @@ export function useNotes() {
 
     return () => {
       unsubscribe();
-      if (saveTimeoutRef.current) {
-        clearTimeout(saveTimeoutRef.current);
-        saveTimeoutRef.current = null;
-      }
+      saveQueueRef.current?.cancelAll();
     };
   }, [user, authLoading]);
 
@@ -357,7 +332,39 @@ export function useNotes() {
     [user],
   );
 
-  // Auto-save with 500ms debounce
+  // Keep queue flush callback pointed at the latest executeSave
+  executeSaveRef.current = executeSave;
+
+  // Flush pending edits when the tab is hidden or the page is unloading
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        void saveQueueRef.current?.flushAll();
+      }
+    };
+    const handleBeforeUnload = () => {
+      void saveQueueRef.current?.flushAll();
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("beforeunload", handleBeforeUnload);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, []);
+
+  // Select a note, flushing any unsaved debounced edits for the previous note first
+  const selectNote = useCallback((nextNoteId: string | null) => {
+    const prevNoteId = activeNoteIdRef.current;
+    if (prevNoteId && prevNoteId !== nextNoteId) {
+      void saveQueueRef.current?.flush(prevNoteId);
+    }
+    setActiveNoteId(nextNoteId);
+  }, []);
+
+  // Auto-save with per-note 500ms debounce
   const updateNote = useCallback(
     (noteId: string, updates: Partial<Note>, debounceMs: number = 500) => {
       // Immediately reflect changes in local state for instantaneous typing responsiveness
@@ -368,46 +375,17 @@ export function useNotes() {
       );
 
       setSyncStatus(navigator.onLine ? "saving" : "offline");
-
-      // Stash pending updates
-      pendingUpdatesRef.current = {
-        noteId,
-        updates: {
-          ...(pendingUpdatesRef.current?.noteId === noteId
-            ? pendingUpdatesRef.current.updates
-            : {}),
-          ...updates,
-        },
-      };
-
-      if (saveTimeoutRef.current) {
-        clearTimeout(saveTimeoutRef.current);
-      }
-
-      saveTimeoutRef.current = setTimeout(() => {
-        if (pendingUpdatesRef.current) {
-          const { noteId: idToSave, updates: dataToSave } =
-            pendingUpdatesRef.current;
-          pendingUpdatesRef.current = null;
-          executeSave(idToSave, dataToSave);
-        }
-      }, debounceMs);
+      saveQueueRef.current?.schedule(noteId, updates, debounceMs);
     },
-    [executeSave],
+    [],
   );
 
   // Immediate save (e.g. on Cmd+S or note switch)
   const saveNoteImmediate = useCallback(
     async (noteId: string, updates?: Partial<Note>) => {
-      if (saveTimeoutRef.current) {
-        clearTimeout(saveTimeoutRef.current);
-        saveTimeoutRef.current = null;
-      }
-      const dataToSave = updates || pendingUpdatesRef.current?.updates || {};
-      pendingUpdatesRef.current = null;
-      await executeSave(noteId, dataToSave);
+      await saveQueueRef.current?.flush(noteId, updates);
     },
-    [executeSave],
+    [],
   );
 
   // Create a new note
@@ -498,6 +476,7 @@ export function useNotes() {
   const deleteNote = useCallback(
     async (noteId: string) => {
       try {
+        saveQueueRef.current?.cancel(noteId);
         setSyncStatus("saving");
 
         if (user) {
@@ -559,16 +538,16 @@ export function useNotes() {
     [folderList, notes],
   );
 
-  // Add custom folder
+  // Add custom folder (supports nested paths like "Study/Math")
   const addFolder = useCallback(
     (folderName: string): boolean => {
-      const trimmed = folderName.trim();
-      if (!trimmed || hasFolder(allFolders, trimmed)) {
+      const normalized = normalizeFolderPath(folderName);
+      if (!normalized || hasFolder(allFolders, normalized)) {
         return false;
       }
 
       setFolderList((prev) => {
-        const next = addFolderToList(prev, trimmed);
+        const next = addFolderToList(prev, normalized);
         try {
           localStorage.setItem(FOLDERS_STORAGE_KEY, JSON.stringify(next));
         } catch (e) {
@@ -581,48 +560,58 @@ export function useNotes() {
     [allFolders],
   );
 
-  // Delete folder & safely migrate notes to 'General'
+  // Delete folder (and any nested subfolders) & safely migrate notes to 'General'
   const deleteFolder = useCallback(
     async (folderToDelete: string): Promise<number> => {
-      const targetLower = folderToDelete.trim().toLowerCase();
-      if (targetLower === "general") {
+      const normalized = normalizeFolderPath(folderToDelete);
+      if (!normalized || normalized.toLowerCase() === "general") {
         // Prevent deleting root fallback folder
         return 0;
       }
 
-      // Find affected notes
-      const affected = selectNotesInFolder(notes, folderToDelete);
+      // Find affected notes (including notes in nested subfolders)
+      const affected = selectNotesInFolder(notes, normalized);
 
       // Reassign affected notes to 'General'
       if (affected.length > 0) {
-        setNotes((prevNotes) =>
-          prevNotes.map((n) =>
-            n.folder.trim().toLowerCase() === targetLower
-              ? { ...n, folder: "General", updatedAt: Date.now() }
-              : n,
-          ),
+        const previousNotes = notes;
+        const now = Date.now();
+        const updatedNotes = notes.map((n) =>
+          isFolderOrDescendant(n.folder, normalized)
+            ? { ...n, folder: "General", updatedAt: now }
+            : n,
         );
+
+        setNotes(updatedNotes);
 
         if (user) {
           try {
-            await Promise.all(
-              affected.map((n) =>
-                updateDoc(doc(db, "notes", n.id), {
+            // Firestore writeBatch supports up to 500 writes per batch
+            const BATCH_LIMIT = 500;
+            for (let i = 0; i < affected.length; i += BATCH_LIMIT) {
+              const batch = writeBatch(db);
+              const chunk = affected.slice(i, i + BATCH_LIMIT);
+              for (const n of chunk) {
+                batch.update(doc(db, "notes", n.id), {
                   folder: "General",
-                  updatedAt: Date.now(),
-                }),
-              ),
-            );
-          } catch (err) {
+                  updatedAt: now,
+                });
+              }
+              await batch.commit();
+            }
+          } catch (err: unknown) {
             console.error("Failed to move notes to General in Firestore:", err);
+            setNotes(previousNotes);
+            const message =
+              err instanceof Error
+                ? err.message
+                : "Failed to move notes to General.";
+            setError(message);
+            setSyncStatus("error");
+            return 0;
           }
         } else {
-          const updated = notes.map((n) =>
-            n.folder.trim().toLowerCase() === targetLower
-              ? { ...n, folder: "General", updatedAt: Date.now() }
-              : n,
-          );
-          saveLocalGuestNotes(updated);
+          saveLocalGuestNotes(updatedNotes);
         }
       }
 
@@ -637,9 +626,12 @@ export function useNotes() {
         return next;
       });
 
-      // If active filter was this folder, reset to 'all'
+      // If active filter was this folder or a descendant, reset to 'all'
       setFilter((prev) => {
-        if (prev.folder.trim().toLowerCase() === targetLower) {
+        if (
+          prev.folder !== "all" &&
+          isFolderOrDescendant(prev.folder, normalized)
+        ) {
           return { ...prev, folder: "all" };
         }
         return prev;
@@ -666,14 +658,17 @@ export function useNotes() {
     return notes.find((n) => n.id === activeNoteId) || null;
   }, [notes, activeNoteId]);
 
+  const clearError = useCallback(() => setError(null), []);
+
   return {
     notes,
     filteredNotes,
     parsedSearch,
     activeNote,
     activeNoteId,
-    setActiveNoteId,
+    setActiveNoteId: selectNote,
     loading,
+    isMigrating,
     error,
     syncStatus,
     isOnline,
@@ -688,6 +683,6 @@ export function useNotes() {
     saveNoteImmediate,
     deleteNote,
     togglePin,
-    clearError: () => setError(null),
+    clearError,
   };
 }

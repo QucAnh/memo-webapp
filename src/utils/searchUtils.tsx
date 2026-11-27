@@ -227,14 +227,12 @@ export function getSmartExcerpt(
 
   const cleanLower = clean.toLowerCase();
   let firstMatchIndex = -1;
-  let matchedTermLength = 0;
 
   for (const term of terms) {
     if (!term) continue;
     const idx = cleanLower.indexOf(term.toLowerCase());
     if (idx !== -1 && (firstMatchIndex === -1 || idx < firstMatchIndex)) {
       firstMatchIndex = idx;
-      matchedTermLength = term.length;
     }
   }
 

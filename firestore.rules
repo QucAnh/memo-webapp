@@ -1,12 +1,157 @@
 rules_version = '2';
+
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// This security rules file assumes the following data structures:
+//
+// Collection: /notes/{noteId}
+// Document ID: Auto-generated Firestore document ID (matches `id` field)
+// Fields (all required; no extraneous fields allowed):
+//   - id: string (required, immutable, 1..128 chars, must equal noteId)
+//   - title: string (required, 0..500 chars)
+//   - content: string (required, 0..200000 chars)
+//   - tags: list<string> (required, 0..50 items, all elements must be strings,
+//           total combined length <= 2500 chars)
+//   - folder: string (required, 1..100 chars)
+//   - isPinned: bool (required)
+//   - createdAt: number (required, immutable, > 0; epoch ms timestamp)
+//   - updatedAt: number (required, > 0; epoch ms timestamp)
+//   - userId: string (required, immutable, 1..128 chars, must equal request.auth.uid)
+//
+// All other collections and paths (including /users) are denied by default.
+// ===============================================================
+
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /notes/{noteId} {
-      allow read, update, delete: if request.auth != null && resource.data.userId == request.auth.uid;
-      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    // Check if the user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
     }
-    match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
+
+    // Check if the authenticated user owns the target userId
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Check if the authenticated user owns the existing document
+    function isDocOwner() {
+      return isAuthenticated() && resource.data.userId == request.auth.uid;
+    }
+
+    // Verify userId matches the authenticated user on create
+    function userIdUnchanged() {
+      return ('userId' in request.resource.data)
+        && request.resource.data.userId == request.auth.uid;
+    }
+
+    // Ensure userId is not modified on update
+    function userIdNotModified() {
+      return ('userId' in request.resource.data)
+        && request.resource.data.userId == resource.data.userId;
+    }
+
+    // Validate that all required fields are present on the resulting document
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    // Validate that the resulting document contains only allowed fields
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    // Validate that immutable fields have not changed on update
+    function areImmutableFieldsUnchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    // Validate tags list: must be a list of <= 50 strings with bounded total size.
+    // Note: In Firestore Rules CEL, List.join() fails (denying access) if any
+    // element in the list is not a string.
+    function isValidTags(tags) {
+      return tags is list
+        && tags.size() <= 50
+        && tags.join('').size() <= 2500;
+    }
+
+    // ===============================================================
+    // Domain Validators (used in BOTH create and update rules)
+    // ===============================================================
+
+    function isValidNote(data, noteId) {
+      let allowedFields = [
+        'id',
+        'title',
+        'content',
+        'tags',
+        'folder',
+        'isPinned',
+        'createdAt',
+        'updatedAt',
+        'userId'
+      ];
+
+      return hasOnlyAllowedFields(allowedFields)
+        && hasRequiredFields(allowedFields)
+        && data.id is string
+        && data.id == noteId
+        && data.id.size() > 0
+        && data.id.size() <= 128
+        && data.title is string
+        && data.title.size() <= 500
+        && data.content is string
+        && data.content.size() <= 200000
+        && isValidTags(data.tags)
+        && data.folder is string
+        && data.folder.size() > 0
+        && data.folder.size() <= 100
+        && data.isPinned is bool
+        && data.createdAt is number
+        && data.createdAt > 0
+        && data.updatedAt is number
+        && data.updatedAt > 0
+        && data.userId is string
+        && data.userId.size() > 0
+        && data.userId.size() <= 128
+        && isOwner(data.userId);
+    }
+
+    // ===============================================================
+    // Collection Rules
+    // ===============================================================
+
+    match /notes/{noteId} {
+      // Supports get and real-time query: where("userId", "==", user.uid)
+      allow read: if isDocOwner();
+
+      // Create: authenticated user creating their own valid note
+      allow create: if isAuthenticated()
+        && userIdUnchanged()
+        && isValidNote(request.resource.data, noteId);
+
+      // Update: owner updating their own note; validates full merged document
+      // and protects immutable fields (id, userId, createdAt)
+      allow update: if isDocOwner()
+        && userIdNotModified()
+        && areImmutableFieldsUnchanged(['id', 'userId', 'createdAt'])
+        && request.resource.data.id == resource.data.id
+        && request.resource.data.createdAt == resource.data.createdAt
+        && isValidNote(request.resource.data, noteId);
+
+      // Delete: only the note owner can delete their note
+      allow delete: if isDocOwner();
+    }
+
+    // Default deny for all other paths
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }

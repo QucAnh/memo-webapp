@@ -1,5 +1,6 @@
 import { Note, NoteFilter } from "../types/note";
 import { ParsedSearchQuery, matchesSearchQuery } from "./searchUtils";
+import { isFolderOrDescendant } from "./folders";
 
 /** Title of the seeded welcome note, including copies stored without the emoji prefix. */
 const WELCOME_TITLE = "Welcome to MemoFlow";
@@ -68,7 +69,7 @@ export function filterNotes(
   return deduplicateNotes(notes).filter((n) => {
     if (
       filter.folder !== "all" &&
-      n.folder.toLowerCase() !== filter.folder.toLowerCase()
+      !isFolderOrDescendant(n.folder, filter.folder)
     ) {
       return false;
     }
