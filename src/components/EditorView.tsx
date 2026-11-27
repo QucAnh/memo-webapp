@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Note, SyncStatus } from "../types/note";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { toggleTaskAtIndex } from "../utils/markdown";
+import memoLogo from "../assets/MEMO.png";
 import {
   Menu,
   Search,
@@ -32,7 +33,27 @@ import {
   Link as LinkIcon,
   Table,
   Type,
+  Smile,
 } from "lucide-react";
+
+const ICON_PICKER_GROUPS: Array<{ label: string; items: string[] }> = [
+  {
+    label: "Study",
+    items: ["📚", "📝", "💡", "🧠", "📖", "🎓", "🔬", "💻", "📐", "🧪", "🗂️", "✏️"],
+  },
+  {
+    label: "Status",
+    items: ["✅", "⬜", "⏳", "🔥", "🎯", "⭐", "📌", "🚀", "🏆", "💯", "🔔", "📅"],
+  },
+  {
+    label: "Callouts",
+    items: ["✨", "⚠️", "❗", "❓", "💬", "🔗", "📎", "🔑", "👉", "👀", "💭", "⚡"],
+  },
+  {
+    label: "Symbols",
+    items: ["→", "←", "↔", "⇒", "⇔", "•", "✓", "✗", "±", "≈", "≠", "∞"],
+  },
+];
 
 export type EditorViewMode = "editor" | "preview" | "split";
 
@@ -92,6 +113,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
   const [showTagInput, setShowTagInput] = useState(false);
   const [tagActiveIndex, setTagActiveIndex] = useState(0);
   const [showFormatting, setShowFormatting] = useState(false);
+  const [iconPickerOpen, setIconPickerOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [folderMenuOpen, setFolderMenuOpen] = useState(false);
   const [isChromeFaded, setIsChromeFaded] = useState(false);
@@ -112,6 +134,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
   const menuRef = useRef<HTMLDivElement>(null);
   const folderMenuRef = useRef<HTMLDivElement>(null);
   const tagPickerRef = useRef<HTMLDivElement>(null);
+  const iconPickerRef = useRef<HTMLDivElement>(null);
   const fadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Sync local mirror state whenever active note changes
@@ -162,7 +185,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
 
   // Close popovers on outside click or Escape
   useEffect(() => {
-    if (!menuOpen && !folderMenuOpen && !showTagInput) return;
+    if (!menuOpen && !folderMenuOpen && !showTagInput && !iconPickerOpen) return;
     const handlePointerDown = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
         setMenuOpen(false);
@@ -180,6 +203,12 @@ export const EditorView: React.FC<EditorViewProps> = ({
         setShowTagInput(false);
         setTagInput("");
       }
+      if (
+        iconPickerRef.current &&
+        !iconPickerRef.current.contains(e.target as Node)
+      ) {
+        setIconPickerOpen(false);
+      }
     };
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -187,6 +216,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
         setFolderMenuOpen(false);
         setShowTagInput(false);
         setTagInput("");
+        setIconPickerOpen(false);
       }
     };
     document.addEventListener("mousedown", handlePointerDown);
@@ -195,7 +225,7 @@ export const EditorView: React.FC<EditorViewProps> = ({
       document.removeEventListener("mousedown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [menuOpen, folderMenuOpen, showTagInput]);
+  }, [menuOpen, folderMenuOpen, showTagInput, iconPickerOpen]);
 
   // Typing-focus fade: gently dim header/footer after 1.5s of typing, restore on pointer move
   const triggerTypingFocus = useCallback(() => {
@@ -900,13 +930,46 @@ export const EditorView: React.FC<EditorViewProps> = ({
             </div>
           )}
 
-          {/* Optional Compact Formatting Bar (toggled via Aa) */}
+          {/* Optional Compact Formatting Bar (toggled via Format pill) */}
           {showFormatting && viewMode !== "preview" && (
-            <div
-              id="markdown-formatting-toolbar"
-              onMouseDown={(e) => e.preventDefault()}
-              className="px-4 py-1.5 border-t border-[#E7E5E0] dark:border-[#282825] bg-[#F4F2EC]/80 dark:bg-[#1B1B19]/90 flex items-center justify-center gap-1 overflow-x-auto no-scrollbar text-[#78716C] dark:text-[#8A8985] shrink-0"
-            >
+            <div ref={iconPickerRef} className="relative shrink-0">
+              {iconPickerOpen && (
+                <div
+                  id="format-icon-picker-popover"
+                  onMouseDown={(e) => e.preventDefault()}
+                  className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-72 max-w-[92vw] p-3 rounded-xl bg-[#FAF9F6] dark:bg-[#1F1F1D] border border-[#E7E5E0] dark:border-[#2E2E2A] shadow-2xl z-30 space-y-2.5"
+                >
+                  {ICON_PICKER_GROUPS.map((group) => (
+                    <div key={group.label}>
+                      <div className="text-[10px] font-medium uppercase tracking-wider text-[#78716C] dark:text-[#8A8985] mb-1">
+                        {group.label}
+                      </div>
+                      <div className="grid grid-cols-6 gap-1">
+                        {group.items.map((symbol) => (
+                          <button
+                            key={symbol}
+                            type="button"
+                            onClick={() => {
+                              insertFormatting(`${symbol} `, "", "");
+                              setIconPickerOpen(false);
+                            }}
+                            title={`Insert ${symbol}`}
+                            className="h-7 rounded-md flex items-center justify-center text-sm hover:bg-black/5 dark:hover:bg-white/10 transition-colors cursor-pointer"
+                          >
+                            {symbol}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div
+                id="markdown-formatting-toolbar"
+                onMouseDown={(e) => e.preventDefault()}
+                className="px-4 py-1.5 border-t border-[#E7E5E0] dark:border-[#282825] bg-[#F4F2EC]/80 dark:bg-[#1B1B19]/90 flex items-center justify-center gap-1 overflow-x-auto no-scrollbar text-[#78716C] dark:text-[#8A8985]"
+              >
               <button
                 type="button"
                 onClick={() => insertFormatting("**", "**", "bold")}
@@ -1039,34 +1102,71 @@ export const EditorView: React.FC<EditorViewProps> = ({
               >
                 <Table className="w-3.5 h-3.5" />
               </button>
+
+              <div className="h-3.5 w-px bg-[#E7E5E0] dark:bg-[#2E2E2A] mx-1" />
+
+              <button
+                id="format-icon-picker-btn"
+                type="button"
+                onClick={() => setIconPickerOpen((v) => !v)}
+                aria-expanded={iconPickerOpen}
+                aria-label="Insert emoji or symbol"
+                className={`p-1.5 rounded transition-colors cursor-pointer ${
+                  iconPickerOpen
+                    ? "bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                    : "hover:bg-black/5 dark:hover:bg-white/10 hover:text-[#1C1917] dark:hover:text-[#EDEDEB]"
+                }`}
+                title="Insert icon / emoji"
+              >
+                <Smile className="w-3.5 h-3.5" />
+              </button>
+              </div>
             </div>
           )}
 
           {/* Quiet Single-Line Footer */}
           <footer
-            className={`h-10 px-4 sm:px-6 flex items-center justify-between text-[11px] text-[#78716C] dark:text-[#8A8985] select-none shrink-0 transition-opacity duration-300 ${chromeOpacityClass}`}
+            className={`relative h-10 px-4 sm:px-6 flex items-center justify-between text-[11px] text-[#78716C] dark:text-[#8A8985] select-none shrink-0 transition-opacity duration-300 ${chromeOpacityClass}`}
           >
             <div>
               {viewMode !== "preview" && (
                 <button
                   id="toggle-formatting-toolbar-btn"
                   type="button"
-                  onClick={() => setShowFormatting((v) => !v)}
+                  onClick={() => {
+                    setShowFormatting((v) => {
+                      if (v) setIconPickerOpen(false);
+                      return !v;
+                    });
+                  }}
                   title={
                     showFormatting
                       ? "Hide formatting toolbar"
                       : "Show formatting toolbar"
                   }
-                  className={`inline-flex items-center gap-1 px-2 py-1 rounded-md transition-colors cursor-pointer ${
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium border transition-colors cursor-pointer ${
                     showFormatting
-                      ? "bg-black/5 dark:bg-white/10 text-[#1C1917] dark:text-[#EDEDEB]"
-                      : "hover:bg-black/5 dark:hover:bg-white/5 hover:text-[#1C1917] dark:hover:text-[#EDEDEB]"
+                      ? "bg-amber-500/15 border-amber-500/35 text-amber-800 dark:text-amber-300"
+                      : "bg-black/[0.04] dark:bg-white/[0.06] border-[#E7E5E0] dark:border-[#2E2E2A] text-[#1C1917] dark:text-[#EDEDEB] hover:bg-black/[0.08] dark:hover:bg-white/[0.1]"
                   }`}
                 >
                   <Type className="w-3.5 h-3.5" />
                   <span>Format</span>
                 </button>
               )}
+            </div>
+
+            {/* Subtle Centered Brand Watermark (desktop only) */}
+            <div className="hidden md:flex items-center gap-1.5 absolute left-1/2 -translate-x-1/2 opacity-50 hover:opacity-90 transition-opacity pointer-events-auto">
+              <img
+                src={memoLogo}
+                alt=""
+                aria-hidden="true"
+                className="w-4 h-4 rounded-xs"
+              />
+              <span className="text-[11px] font-medium tracking-tight">
+                MemoFlow
+              </span>
             </div>
 
             <div className="flex items-center gap-2.5 whitespace-nowrap text-[11px]">
